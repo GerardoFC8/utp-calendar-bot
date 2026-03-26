@@ -7,15 +7,15 @@ services:
     env_file: .env
     volumes:
       - bot-data:/app/data
+    # Give the container time to shut down cleanly (SIGTERM → bot.stop → Telegram
+    # releases the polling session) before Docker force-kills it (SIGKILL).
+    # This prevents the 409 Conflict when a new container starts polling.
+    stop_grace_period: 15s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-    deploy:
-      update_config:
-        order: stop-first
-        delay: 5s
     labels:
       - "dokploy.enable=true"
 
