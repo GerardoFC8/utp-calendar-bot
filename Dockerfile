@@ -28,8 +28,8 @@ ENV NODE_ENV=production
 ENV DATABASE_PATH=/app/data/utp.db
 ENV TZ=America/Lima
 
-# Healthcheck for Dokploy
-HEALTHCHECK --interval=60s --timeout=10s --start-period=60s --retries=3 \
-  CMD node -e "console.log('ok')" || exit 1
+# Healthcheck: verifies the bot process is running
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=2 \
+  CMD pgrep -f "node dist/index.js" > /dev/null || exit 1
 
 CMD ["node", "dist/index.js"]

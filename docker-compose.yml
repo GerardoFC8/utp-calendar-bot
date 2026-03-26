@@ -12,6 +12,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      update_config:
+        order: stop-first
+        delay: 5s
     labels:
       - "dokploy.enable=true"
 
