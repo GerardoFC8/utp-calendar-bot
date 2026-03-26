@@ -1,6 +1,6 @@
-import { desc, sql, gte, lte, and, inArray } from 'drizzle-orm';
+import { desc, sql, gte, lte, and, inArray, lt, like } from 'drizzle-orm';
 import { getDatabase } from './index.js';
-import { courses, classes, activities, changes, scrapeLog } from './schema.js';
+import { courses, classes, activities, changes, scrapeLog, sentReminders } from './schema.js';
 
 // === Courses ===
 
@@ -132,6 +132,23 @@ export function getPendingActivities() {
     .all();
 }
 
+export function getActivitiesForMonth(year: number, month: number) {
+  const db = getDatabase();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const prefix = `${year}-${pad(month)}-%`;
+  return db
+    .select()
+    .from(activities)
+    .where(
+      and(
+        like(activities.finishAt, prefix),
+        inArray(activities.studentStatus, ['PENDING', 'IN_PROCESS', 'PROGRAMMED']),
+      ),
+    )
+    .orderBy(activities.finishAt)
+    .all();
+}
+
 export function getActivitiesDueSoon(days: number) {
   const db = getDatabase();
   const now = new Date();
@@ -204,6 +221,28 @@ export function getScrapeStats() {
     totalCourses: totalCourses?.count ?? 0,
     pendingActivities: pendingActivities?.count ?? 0,
   };
+}
+
+// === Sent Reminders ===
+
+export function hasReminderBeenSent(classId: string, dateStr: string): boolean {
+  const db = getDatabase();
+  const result = db
+    .select({ count: sql<number>`count(*)` })
+    .from(sentReminders)
+    .where(and(sql`${sentReminders.classId} = ${classId}`, sql`${sentReminders.dateStr} = ${dateStr}`))
+    .get();
+  return (result?.count ?? 0) > 0;
+}
+
+export function markReminderSent(classId: string, dateStr: string): void {
+  const db = getDatabase();
+  db.insert(sentReminders).values({ classId, dateStr }).onConflictDoNothing().run();
+}
+
+export function cleanOldReminders(beforeDateStr: string): void {
+  const db = getDatabase();
+  db.delete(sentReminders).where(lt(sentReminders.dateStr, beforeDateStr)).run();
 }
 
 // === Helpers ===

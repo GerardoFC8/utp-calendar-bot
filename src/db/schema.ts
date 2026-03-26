@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const courses = sqliteTable('courses', {
   id: text('id').primaryKey(),           // courseId from API
@@ -68,3 +68,14 @@ export const scrapeLog = sqliteTable('scrape_log', {
   duration: integer('duration'),
   createdAt: integer('created_at').$defaultFn(() => Date.now()),
 });
+
+export const sentReminders = sqliteTable(
+  'sent_reminders',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    classId: text('class_id').notNull(),
+    dateStr: text('date_str').notNull(),
+    sentAt: integer('sent_at').$defaultFn(() => Date.now()),
+  },
+  (table) => [uniqueIndex('sent_reminders_class_date_idx').on(table.classId, table.dateStr)],
+);

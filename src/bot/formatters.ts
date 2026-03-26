@@ -69,6 +69,113 @@ export function formatDayHeader(date: Date): string {
 }
 
 // ============================================================
+// Resumen formatter
+// ============================================================
+
+export function formatResumen(params: {
+  todayClasses: ClassData[];
+  weekClasses: ClassData[];
+  dueTodayActivities: ActivityData[];
+  dueSoonActivities: ActivityData[];
+  pendingCount: number;
+  nextDeadline: ActivityData | null;
+  today: Date;
+}): string {
+  const {
+    todayClasses,
+    weekClasses,
+    dueTodayActivities,
+    dueSoonActivities,
+    pendingCount,
+    nextDeadline,
+    today,
+  } = params;
+
+  const lines: string[] = [];
+
+  // Header: "Resumen — Jueves 26 de Marzo"
+  const dayName = getSpanishDayName(today);
+  const day = today.getDate();
+  const monthName = getSpanishMonthName(today);
+  lines.push(`*${escapeMarkdown(`Resumen \u2014 ${dayName} ${day} de ${monthName}`)}*`);
+  lines.push('');
+
+  // Hoy: clases
+  const sortedToday = [...todayClasses].sort((a, b) => a.startAt.localeCompare(b.startAt));
+  const todaySlice = sortedToday.slice(0, 5);
+  lines.push(`*Hoy:* ${sortedToday.length} ${sortedToday.length === 1 ? 'clase' : 'clases'}`);
+  for (const cls of todaySlice) {
+    const time = cls.startAt.split(' ')[1]?.substring(0, 5) ?? '';
+    lines.push(`  \\- ${escapeMarkdown(time)} \\| ${escapeMarkdown(cls.title)}`);
+  }
+  lines.push('');
+
+  // Esta semana
+  lines.push(`*Esta semana:* ${weekClasses.length} clases en total`);
+  lines.push('');
+
+  // Vence HOY — omit section if empty
+  if (dueTodayActivities.length > 0) {
+    lines.push(`*Vence HOY:* ${dueTodayActivities.length} ${dueTodayActivities.length === 1 ? 'actividad' : 'actividades'}`);
+    for (const act of dueTodayActivities) {
+      const course = escapeMarkdown(shortenCourseName(act.courseName));
+      const title = escapeMarkdown(act.title);
+      lines.push(`  \\- \\[${course}\\] ${title}`);
+    }
+    lines.push('');
+  }
+
+  // Proximos 7 dias
+  const MAX_SOON = 5;
+  lines.push(`*Proximos 7 dias:* ${dueSoonActivities.length} actividades`);
+  const soonSlice = dueSoonActivities.slice(0, MAX_SOON);
+  for (const act of soonSlice) {
+    const datePart = act.finishAt.split(' ')[0] ?? '';
+    const segs = datePart.split('-');
+    const d = segs[2] ?? '??';
+    const m = segs[1] ?? '??';
+    const dateLabel = escapeMarkdown(`${d}/${m}`);
+    const course = escapeMarkdown(shortenCourseName(act.courseName));
+    const title = escapeMarkdown(act.title);
+    lines.push(`  \\- ${dateLabel} \\[${course}\\] ${title}`);
+  }
+  if (dueSoonActivities.length > MAX_SOON) {
+    const extra = dueSoonActivities.length - MAX_SOON;
+    lines.push(`  _y ${extra} mas\\.\\.\\._`);
+  }
+  lines.push('');
+
+  // Total pendiente
+  lines.push(`*Total pendiente:* ${pendingCount} actividades`);
+  lines.push('');
+
+  // Proximo vencimiento
+  if (nextDeadline) {
+    const days = daysUntilDatetime(nextDeadline.finishAt);
+    const deadline = escapeMarkdown(formatDeadline(nextDeadline.finishAt));
+    const course = escapeMarkdown(shortenCourseName(nextDeadline.courseName));
+    const title = escapeMarkdown(nextDeadline.title);
+
+    let urgency: string;
+    if (days < 0) {
+      urgency = 'VENCIDA\\!';
+    } else if (days === 0) {
+      urgency = 'HOY\\!';
+    } else if (days === 1) {
+      urgency = 'manana';
+    } else {
+      urgency = `en ${days} dias`;
+    }
+
+    lines.push('*Proximo vencimiento:*');
+    lines.push(`  \\[${course}\\] ${title}`);
+    lines.push(`  Vence: ${deadline} \\(${urgency}\\)`);
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================
 // Class formatters
 // ============================================================
 
@@ -135,11 +242,17 @@ export function formatDailySchedule(
 
 export function formatWeeklySchedule(
   classesByDate: Map<string, ClassData[]>,
+  weekLabel?: string,
 ): string {
   const lines: string[] = [];
 
-  lines.push('*Horario de la semana*');
-  lines.push('');
+  if (weekLabel) {
+    lines.push(weekLabel);
+    lines.push('');
+  } else {
+    lines.push('*Horario de la semana*');
+    lines.push('');
+  }
 
   // Sort by date
   const sortedDates = [...classesByDate.keys()].sort();
@@ -205,11 +318,11 @@ export function formatCoursesList(courses: CourseData[]): string {
 // Activity formatters
 // ============================================================
 
-export function formatActivitiesList(activities: ActivityData[]): string {
+export function formatActivitiesList(activities: ActivityData[], header?: string): string {
   if (activities.length === 0) return '_No hay actividades pendientes_';
 
   const lines: string[] = [];
-  lines.push('*Actividades pendientes:*');
+  lines.push(header ?? '*Actividades pendientes:*');
   lines.push('');
 
   // Group by type
@@ -424,4 +537,123 @@ function shortenCourseName(name: string): string {
   // Truncate very long course names for display
   if (name.length <= 20) return name;
   return name.substring(0, 18) + '..';
+}
+
+// ============================================================
+// Plain-text report formatter (for .txt file export)
+// ============================================================
+
+function formatDeadlinePlain(datetime: string): string {
+  const parts = datetime.split(' ');
+  const datePart = parts[0] ?? '';
+  const timePart = parts[1] ?? '';
+  const dateSegments = datePart.split('-');
+  const day = dateSegments[2] ?? '??';
+  const month = dateSegments[1] ?? '??';
+  const year = dateSegments[0] ?? '??';
+  const timeSegments = timePart.split(':');
+  let hours = parseInt(timeSegments[0] ?? '0', 10);
+  const minutes = timeSegments[1] ?? '00';
+  const period = hours >= 12 ? 'PM' : 'AM';
+  if (hours > 12) hours -= 12;
+  if (hours === 0) hours = 12;
+  return `${day}/${month}/${year} a las ${hours}:${minutes} ${period}`;
+}
+
+export function formatReporteTxt(
+  activities: ActivityData[],
+  generatedAt: Date,
+): string {
+  const lines: string[] = [];
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const genStr = `${pad(generatedAt.getDate())}/${pad(generatedAt.getMonth() + 1)}/${generatedAt.getFullYear()} ${pad(generatedAt.getHours())}:${pad(generatedAt.getMinutes())}`;
+
+  lines.push('UTP+ CALENDAR BOT - REPORTE COMPLETO');
+  lines.push(`Generado: ${genStr} (Lima)`);
+  lines.push('=====================================');
+  lines.push('');
+  lines.push(`ACTIVIDADES PENDIENTES (${activities.length} total)`);
+  lines.push('');
+
+  const typeLabels: Record<string, string> = {
+    HOMEWORK: 'TAREAS',
+    FORUM: 'FOROS',
+    EVALUATION: 'EVALUACIONES',
+  };
+
+  const typeOrder = ['HOMEWORK', 'FORUM', 'EVALUATION'];
+
+  for (const type of typeOrder) {
+    const typeActivities = activities.filter((a) => a.activityType === type);
+    if (typeActivities.length === 0) continue;
+
+    const label = typeLabels[type] ?? type;
+    lines.push(`--- ${label} ---`);
+    lines.push('');
+
+    // Sub-group by courseName
+    const byCourse = new Map<string, ActivityData[]>();
+    for (const activity of typeActivities) {
+      const course = activity.courseName;
+      if (!byCourse.has(course)) byCourse.set(course, []);
+      byCourse.get(course)!.push(activity);
+    }
+
+    for (const [courseName, courseActivities] of byCourse) {
+      lines.push(`[${courseName}]`);
+      for (const activity of courseActivities) {
+        const deadline = formatDeadlinePlain(activity.finishAt);
+        const days = daysUntilDatetime(activity.finishAt);
+
+        let urgency: string;
+        if (days < 0) {
+          urgency = 'VENCIDA';
+        } else if (days === 0) {
+          urgency = 'HOY!';
+        } else if (days === 1) {
+          urgency = 'manana';
+        } else {
+          urgency = `en ${days} dias`;
+        }
+
+        lines.push(`  ${activity.title}`);
+        lines.push(`  Vence: ${deadline}  |  ${urgency}`);
+      }
+      lines.push('');
+    }
+  }
+
+  lines.push('=====================================');
+  lines.push(`Total: ${activities.length} actividades pendientes`);
+  lines.push('Reporte generado por UTP+ Calendar Bot');
+
+  return lines.join('\n');
+}
+
+const TELEGRAM_MAX_LENGTH = 4096;
+
+/**
+ * Split a long MarkdownV2 message into chunks that respect Telegram's 4096-char
+ * limit. Splits on newlines so we never break in the middle of a line.
+ */
+export function splitMessage(text: string): string[] {
+  if (text.length <= TELEGRAM_MAX_LENGTH) return [text];
+
+  const chunks: string[] = [];
+  const lines = text.split('\n');
+  let current = '';
+
+  for (const line of lines) {
+    const candidate = current.length === 0 ? line : `${current}\n${line}`;
+    if (candidate.length > TELEGRAM_MAX_LENGTH) {
+      if (current.length > 0) chunks.push(current);
+      current = line;
+    } else {
+      current = candidate;
+    }
+  }
+
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }

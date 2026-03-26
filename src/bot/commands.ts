@@ -7,11 +7,13 @@ import {
   getClassesForDate,
   getPendingActivities,
   getActivitiesDueSoon,
+  getActivitiesForMonth,
   getAllCourses,
   getScrapeStats,
   getLastScrapeLog,
 } from '../db/queries.js';
 import {
+  escapeMarkdown,
   formatDailySchedule,
   formatWeeklySchedule,
   formatCoursesList,
@@ -20,6 +22,9 @@ import {
   formatZoomLinks,
   formatStatusMessage,
   formatRefreshResult,
+  formatReporteTxt,
+  formatResumen,
+  splitMessage,
 } from './formatters.js';
 // sendMessage is available for external callers if needed
 export { sendMessage } from './notifications.js';
@@ -102,6 +107,34 @@ function getTodayStr(): string {
 }
 
 // ============================================================
+// Month helpers
+// ============================================================
+
+const MONTH_NAMES: Record<string, number> = {
+  enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6,
+  julio: 7, agosto: 8, septiembre: 9, octubre: 10, noviembre: 11, diciembre: 12,
+};
+
+const MONTH_LABELS = [
+  '', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+];
+
+function parseMonthArg(arg: string, now: Date): { year: number; month: number } {
+  const offset = parseInt(arg, 10);
+  if (!isNaN(offset)) {
+    const d = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  }
+  const m = MONTH_NAMES[arg.toLowerCase().trim()];
+  if (m !== undefined) {
+    const year = m < now.getMonth() + 1 ? now.getFullYear() + 1 : now.getFullYear();
+    return { year, month: m };
+  }
+  return { year: now.getFullYear(), month: now.getMonth() + 1 };
+}
+
+// ============================================================
 // Command registration
 // ============================================================
 
@@ -115,10 +148,12 @@ export function registerCommands(bot: Telegraf): void {
       '*Comandos disponibles:*',
       '/hoy \\- Clases y actividades de hoy',
       '/manana \\- Clases y actividades de manana',
-      '/semana \\- Horario semanal',
+      '/semana \\[\\+N\\] \\- Horario semanal \\(\\+1 \\= proxima semana\\)',
+      '/resumen \\- Dashboard compacto del dia',
       '/cursos \\- Lista de cursos activos',
-      '/actividades \\- Actividades pendientes',
+      '/actividades \\[mes\\] \\- Actividades del mes \\(ej\\: abril, 1\\)',
       '/pendientes \\- Actividades urgentes \\(proximos 3 dias\\)',
+      '/reporte \\- Exportar actividades completas como archivo TXT',
       '/zoom \\- Links de Zoom',
       '/refresh \\- Ejecutar scrape inmediato',
       '/status \\- Estado del bot',
@@ -162,18 +197,80 @@ export function registerCommands(bot: Telegraf): void {
   });
 
   bot.command('semana', async (ctx) => {
+    const args = (ctx.message?.text ?? '').split(' ').slice(1);
+    const offsetArg = args[0] ?? '0';
+    const weekOffset = parseInt(offsetArg.replace('+', ''), 10);
+    const offset = isNaN(weekOffset) ? 0 : weekOffset;
+
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+
+    // Compute Monday of target week
+    const dayOfWeek = now.getDay(); // 0=Sun
+    const daysToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now.getTime() + (daysToMonday + offset * 7) * 86_400_000);
+    const sunday = new Date(monday.getTime() + 6 * 86_400_000);
+
+    const mondayStr = `${monday.getFullYear()}-${pad(monday.getMonth() + 1)}-${pad(monday.getDate())}`;
+    const sundayStr = `${sunday.getFullYear()}-${pad(sunday.getMonth() + 1)}-${pad(sunday.getDate())}`;
+
     const allClasses = getAllClasses().map(mapClassRow);
     const classesByDate = new Map<string, ClassData[]>();
 
     for (const cls of allClasses) {
-      // Extract "2026-03-28" from "2026-03-28 18:30:00"
       const dateStr = cls.startAt.split(' ')[0] ?? cls.startAt;
+      if (dateStr < mondayStr || dateStr > sundayStr) continue;
       const existing = classesByDate.get(dateStr) ?? [];
       existing.push(cls);
       classesByDate.set(dateStr, existing);
     }
 
-    const message = formatWeeklySchedule(classesByDate);
+    // Build week label
+    const mondayLabel = `${pad(monday.getDate())}/${pad(monday.getMonth() + 1)}`;
+    const sundayLabel = `${pad(sunday.getDate())}/${pad(sunday.getMonth() + 1)}`;
+    const weekLabel = offset === 0
+      ? `*Semana actual \\(${escapeMarkdown(mondayLabel)} \\- ${escapeMarkdown(sundayLabel)}\\):*`
+      : offset > 0
+        ? `*Semana \\+${offset} \\(${escapeMarkdown(mondayLabel)} \\- ${escapeMarkdown(sundayLabel)}\\):*`
+        : `*Semana ${offset} \\(${escapeMarkdown(mondayLabel)} \\- ${escapeMarkdown(sundayLabel)}\\):*`;
+
+    const message = formatWeeklySchedule(classesByDate, weekLabel);
+    for (const chunk of splitMessage(message)) {
+      await ctx.reply(chunk, { parse_mode: 'MarkdownV2' });
+    }
+  });
+
+  bot.command('resumen', async (ctx) => {
+    const today = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+
+    const todayClasses = getClassesForDate(todayStr).map(mapClassRow);
+    const allPendingRows = getPendingActivities();
+    const dueTodayActivities = allPendingRows
+      .map(mapActivityRow)
+      .filter(a => a.finishAt.startsWith(todayStr));
+    const dueSoonActivities = getActivitiesDueSoon(7).map(mapActivityRow);
+    const nextDeadline = allPendingRows.length > 0 ? mapActivityRow(allPendingRows[0]!) : null;
+
+    // Week classes: classes from today through 6 days ahead
+    const weekEnd = new Date(today.getTime() + 6 * 86_400_000);
+    const weekEndStr = `${weekEnd.getFullYear()}-${pad(weekEnd.getMonth() + 1)}-${pad(weekEnd.getDate())}`;
+    const allClasses = getAllClasses().map(mapClassRow);
+    const weekClasses = allClasses.filter(
+      c => c.startAt >= `${todayStr} 00:00:00` && c.startAt <= `${weekEndStr} 23:59:59`,
+    );
+
+    const message = formatResumen({
+      todayClasses,
+      weekClasses,
+      dueTodayActivities,
+      dueSoonActivities,
+      pendingCount: allPendingRows.length,
+      nextDeadline,
+      today,
+    });
+
     await ctx.reply(message, { parse_mode: 'MarkdownV2' });
   });
 
@@ -184,28 +281,54 @@ export function registerCommands(bot: Telegraf): void {
   });
 
   bot.command('actividades', async (ctx) => {
-    const activities = getPendingActivities().map(mapActivityRow);
+    const now = new Date();
+    const text = ctx.message?.text ?? '';
+    const arg = text.split(' ')[1];
+    const { year, month } = arg
+      ? parseMonthArg(arg, now)
+      : { year: now.getFullYear(), month: now.getMonth() + 1 };
+
+    const activities = getActivitiesForMonth(year, month).map(mapActivityRow);
 
     if (activities.length === 0) {
-      await ctx.reply('_No hay actividades pendientes_', { parse_mode: 'MarkdownV2' });
+      await ctx.reply(
+        `_No hay actividades pendientes para ${MONTH_LABELS[month]} ${year}_`,
+        { parse_mode: 'MarkdownV2' },
+      );
       return;
     }
 
-    const message = formatActivitiesList(activities);
-    await ctx.reply(message, { parse_mode: 'MarkdownV2' });
+    const header = `*Actividades \\- ${escapeMarkdown(MONTH_LABELS[month]!)} ${year}:*`;
+    const message = formatActivitiesList(activities, header);
+    for (const chunk of splitMessage(message)) {
+      await ctx.reply(chunk, { parse_mode: 'MarkdownV2' });
+    }
   });
 
   // Alias for backwards compatibility
   bot.command('tareas', async (ctx) => {
-    const activities = getPendingActivities().map(mapActivityRow);
+    const now = new Date();
+    const text = ctx.message?.text ?? '';
+    const arg = text.split(' ')[1];
+    const { year, month } = arg
+      ? parseMonthArg(arg, now)
+      : { year: now.getFullYear(), month: now.getMonth() + 1 };
+
+    const activities = getActivitiesForMonth(year, month).map(mapActivityRow);
 
     if (activities.length === 0) {
-      await ctx.reply('_No hay actividades pendientes_', { parse_mode: 'MarkdownV2' });
+      await ctx.reply(
+        `_No hay actividades pendientes para ${MONTH_LABELS[month]} ${year}_`,
+        { parse_mode: 'MarkdownV2' },
+      );
       return;
     }
 
-    const message = formatActivitiesList(activities);
-    await ctx.reply(message, { parse_mode: 'MarkdownV2' });
+    const header = `*Actividades \\- ${escapeMarkdown(MONTH_LABELS[month]!)} ${year}:*`;
+    const message = formatActivitiesList(activities, header);
+    for (const chunk of splitMessage(message)) {
+      await ctx.reply(chunk, { parse_mode: 'MarkdownV2' });
+    }
   });
 
   bot.command('pendientes', async (ctx) => {
@@ -276,16 +399,39 @@ export function registerCommands(bot: Telegraf): void {
     await ctx.reply(message, { parse_mode: 'MarkdownV2' });
   });
 
+  bot.command('reporte', async (ctx) => {
+    const activities = getPendingActivities().map(mapActivityRow);
+
+    if (activities.length === 0) {
+      await ctx.reply('_No hay actividades pendientes_', { parse_mode: 'MarkdownV2' });
+      return;
+    }
+
+    const now = new Date();
+    const content = formatReporteTxt(activities, now);
+    const buffer = Buffer.from(content, 'utf-8');
+
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const filename = `reporte-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.txt`;
+
+    await ctx.replyWithDocument(
+      { source: buffer, filename },
+      { caption: `Reporte con ${activities.length} actividades pendientes` },
+    );
+  });
+
   bot.command('help', async (ctx) => {
     const message = [
       '*Comandos disponibles:*',
       '',
       '/hoy \\- Clases y actividades de hoy',
       '/manana \\- Clases y actividades de manana',
-      '/semana \\- Horario semanal completo',
+      '/semana \\[\\+N\\] \\- Horario semanal \\(\\+1 \\= proxima semana\\)',
+      '/resumen \\- Dashboard compacto del dia',
       '/cursos \\- Lista de cursos activos del semestre',
-      '/actividades \\- Todas las actividades pendientes',
+      '/actividades \\[mes\\] \\- Actividades del mes \\(ej\\: abril, 1\\)',
       '/pendientes \\- Actividades urgentes \\(proximos 3 dias\\)',
+      '/reporte \\- Exportar actividades completas como archivo TXT',
       '/zoom \\- Links de Zoom de clases proximas',
       '/refresh \\- Ejecutar scrape inmediato',
       '/status \\- Estado del bot y ultimo scrape',

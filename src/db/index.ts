@@ -96,6 +96,16 @@ export function initDatabase(): typeof db {
       duration INTEGER,
       created_at INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS sent_reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id TEXT NOT NULL,
+      date_str TEXT NOT NULL,
+      sent_at INTEGER
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS sent_reminders_class_date_idx
+      ON sent_reminders (class_id, date_str);
   `);
 
   logger.info({ path: dbPath }, 'Database initialized');
