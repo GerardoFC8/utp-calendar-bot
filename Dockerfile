@@ -1,15 +1,16 @@
-# Build stage
-FROM node:22-slim AS builder
+# Build stage — uses the same base as production so native modules compile
+# against the exact same Node.js version that will run them.
+# Use Playwright's official image — includes Chromium + system dependencies.
+# The tag MUST match the version in package.json (playwright@1.58.2 -> v1.58.2).
+# Check available tags: https://mcr.microsoft.com/en-us/artifact/mar/playwright/tags
+FROM mcr.microsoft.com/playwright:v1.58.2-noble AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-# Production stage
-# Use Playwright's official image — includes Chromium + system dependencies.
-# The tag MUST match the version in package.json (playwright@1.58.2 -> v1.58.2).
-# Check available tags: https://mcr.microsoft.com/en-us/artifact/mar/playwright/tags
+# Production stage — same image, copy only artifacts
 FROM mcr.microsoft.com/playwright:v1.58.2-noble
 WORKDIR /app
 
