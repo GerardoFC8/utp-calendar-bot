@@ -1,8 +1,9 @@
-import { eq, desc, sql } from 'drizzle-orm';
+import { desc, sql, gte, lte, and, inArray } from 'drizzle-orm';
 import { getDatabase } from './index.js';
-import { courses, classes, tasks, changes, scrapeLog } from './schema.js';
+import { courses, classes, activities, changes, scrapeLog } from './schema.js';
 
 // === Courses ===
+
 export function upsertCourse(course: typeof courses.$inferInsert) {
   const db = getDatabase();
   return db
@@ -11,12 +12,16 @@ export function upsertCourse(course: typeof courses.$inferInsert) {
     .onConflictDoUpdate({
       target: courses.id,
       set: {
+        sectionId: course.sectionId,
         name: course.name,
-        code: course.code,
-        section: course.section,
-        professor: course.professor,
-        zoomLink: course.zoomLink,
-        internalUrl: course.internalUrl,
+        classNumber: course.classNumber,
+        modality: course.modality,
+        acadCareer: course.acadCareer,
+        period: course.period,
+        teacherFirstName: course.teacherFirstName,
+        teacherLastName: course.teacherLastName,
+        teacherEmail: course.teacherEmail,
+        progress: course.progress,
         lastSeen: course.lastSeen,
       },
     })
@@ -29,6 +34,7 @@ export function getAllCourses() {
 }
 
 // === Classes ===
+
 export function upsertClass(classData: typeof classes.$inferInsert) {
   const db = getDatabase();
   return db
@@ -37,14 +43,15 @@ export function upsertClass(classData: typeof classes.$inferInsert) {
     .onConflictDoUpdate({
       target: classes.id,
       set: {
-        name: classData.name,
-        professor: classData.professor,
-        day: classData.day,
-        startTime: classData.startTime,
-        endTime: classData.endTime,
-        room: classData.room,
+        title: classData.title,
+        courseId: classData.courseId,
+        sectionId: classData.sectionId,
+        modality: classData.modality,
+        startAt: classData.startAt,
+        finishAt: classData.finishAt,
         zoomLink: classData.zoomLink,
-        section: classData.section,
+        weekNumber: classData.weekNumber,
+        isLongLasting: classData.isLongLasting,
         lastSeen: classData.lastSeen,
       },
     })
@@ -56,56 +63,98 @@ export function getAllClasses() {
   return db.select().from(classes).all();
 }
 
-export function getClassesByDay(day: string) {
-  const db = getDatabase();
-  return db.select().from(classes).where(eq(classes.day, day)).all();
-}
-
-// === Tasks ===
-export function upsertTask(task: typeof tasks.$inferInsert) {
+export function getUpcomingClasses(fromDate: string) {
   const db = getDatabase();
   return db
-    .insert(tasks)
-    .values(task)
+    .select()
+    .from(classes)
+    .where(gte(classes.startAt, fromDate))
+    .orderBy(classes.startAt)
+    .all();
+}
+
+export function getClassesForDate(datePrefix: string) {
+  // datePrefix = "2026-03-28" — matches all classes starting on that date
+  const db = getDatabase();
+  return db
+    .select()
+    .from(classes)
+    .where(
+      and(
+        gte(classes.startAt, `${datePrefix} 00:00:00`),
+        lte(classes.startAt, `${datePrefix} 23:59:59`),
+      ),
+    )
+    .orderBy(classes.startAt)
+    .all();
+}
+
+// === Activities ===
+
+export function upsertActivity(activity: typeof activities.$inferInsert) {
+  const db = getDatabase();
+  return db
+    .insert(activities)
+    .values(activity)
     .onConflictDoUpdate({
-      target: tasks.id,
+      target: activities.id,
       set: {
-        name: task.name,
-        subject: task.subject,
-        dueDate: task.dueDate,
-        description: task.description,
-        zoomLink: task.zoomLink,
-        status: task.status,
-        lastSeen: task.lastSeen,
+        title: activity.title,
+        activityType: activity.activityType,
+        courseName: activity.courseName,
+        courseId: activity.courseId,
+        publishAt: activity.publishAt,
+        finishAt: activity.finishAt,
+        weekNumber: activity.weekNumber,
+        studentStatus: activity.studentStatus,
+        evaluationSystem: activity.evaluationSystem,
+        isQualificated: activity.isQualificated,
+        lastSeen: activity.lastSeen,
       },
     })
     .run();
 }
 
-export function getAllTasks() {
+export function getAllActivities() {
   const db = getDatabase();
-  return db.select().from(tasks).all();
+  return db.select().from(activities).all();
 }
 
-export function getPendingTasks() {
+export function getPendingActivities() {
   const db = getDatabase();
   return db
     .select()
-    .from(tasks)
-    .where(eq(tasks.status, 'pending'))
+    .from(activities)
+    .where(
+      inArray(activities.studentStatus, ['PENDING', 'IN_PROCESS', 'PROGRAMMED']),
+    )
+    .orderBy(activities.finishAt)
     .all();
 }
 
-export function markTaskDone(taskId: string) {
+export function getActivitiesDueSoon(days: number) {
   const db = getDatabase();
+  const now = new Date();
+  const limit = new Date(now.getTime() + days * 86_400_000);
+
+  const nowStr = formatDatetime(now);
+  const limitStr = formatDatetime(limit);
+
   return db
-    .update(tasks)
-    .set({ status: 'done' })
-    .where(eq(tasks.id, taskId))
-    .run();
+    .select()
+    .from(activities)
+    .where(
+      and(
+        gte(activities.finishAt, nowStr),
+        lte(activities.finishAt, limitStr),
+      ),
+    )
+    .orderBy(activities.finishAt)
+    .all();
 }
 
 // === Changes ===
+
 export function insertChange(change: typeof changes.$inferInsert) {
   const db = getDatabase();
   return db.insert(changes).values(change).run();
@@ -122,6 +171,7 @@ export function getRecentChanges(limit = 20) {
 }
 
 // === Scrape Log ===
+
 export function insertScrapeLog(log: typeof scrapeLog.$inferInsert) {
   const db = getDatabase();
   return db.insert(scrapeLog).values(log).run();
@@ -140,18 +190,30 @@ export function getLastScrapeLog() {
 export function getScrapeStats() {
   const db = getDatabase();
   const totalClasses = db.select({ count: sql<number>`count(*)` }).from(classes).get();
-  const totalTasks = db.select({ count: sql<number>`count(*)` }).from(tasks).get();
+  const totalActivities = db.select({ count: sql<number>`count(*)` }).from(activities).get();
   const totalCourses = db.select({ count: sql<number>`count(*)` }).from(courses).get();
-  const pendingTasks = db
+  const pendingActivities = db
     .select({ count: sql<number>`count(*)` })
-    .from(tasks)
-    .where(eq(tasks.status, 'pending'))
+    .from(activities)
+    .where(inArray(activities.studentStatus, ['PENDING', 'IN_PROCESS', 'PROGRAMMED']))
     .get();
 
   return {
     totalClasses: totalClasses?.count ?? 0,
-    totalTasks: totalTasks?.count ?? 0,
+    totalActivities: totalActivities?.count ?? 0,
     totalCourses: totalCourses?.count ?? 0,
-    pendingTasks: pendingTasks?.count ?? 0,
+    pendingActivities: pendingActivities?.count ?? 0,
   };
 }
+
+// === Helpers ===
+
+function formatDatetime(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+// Row type aliases for callers that need the raw DB shape
+export type ClassRow = typeof classes.$inferSelect;
+export type ActivityRow = typeof activities.$inferSelect;
+export type CourseRow = typeof courses.$inferSelect;

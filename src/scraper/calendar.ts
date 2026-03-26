@@ -1,243 +1,274 @@
 import type { Page } from 'playwright';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { type ClassData, cleanText, parseTime, generateClassId } from './parser.js';
+import { type ClassData, type ActivityData, cleanText } from './parser.js';
 import { takeScreenshot } from './browser.js';
 import type { InterceptedData } from './interceptor.js';
 
-// Maps Spanish day abbreviations (from the calendar column headers) to full names.
-// The header format is "Lun 23", "Mar 24", "Mié 25", etc.
-const DAY_ABBREVIATIONS: Record<string, string> = {
-  Lun: 'Lunes',
-  Mar: 'Martes',
-  'Mié': 'Miercoles',
-  Mir: 'Miercoles', // fallback without accent
-  Jue: 'Jueves',
-  Vie: 'Viernes',
-  'Sáb': 'Sabado',
-  Sab: 'Sabado',
-  Dom: 'Domingo',
-};
-
-export async function scrapeCalendar(page: Page, intercepted?: InterceptedData): Promise<ClassData[]> {
+export async function scrapeCalendar(
+  page: Page,
+  intercepted: InterceptedData,
+): Promise<{ classes: ClassData[]; activities: ActivityData[] }> {
   const calendarUrl = `${config.UTP_BASE_URL}${config.UTP_CALENDAR_PATH}`;
   logger.info({ url: calendarUrl }, 'Navigating to calendar');
 
   await page.goto(calendarUrl, { waitUntil: 'networkidle' });
 
-  // Wait for the ARIA grid rendered by the SPA calendar component
-  try {
-    await page.waitForSelector('[role="grid"]', { timeout: 15_000 });
-    logger.info('Calendar grid found');
-  } catch {
-    await takeScreenshot(page, 'calendar-not-found');
-    logger.warn('Calendar grid not found');
-    return [];
+  // Give the SPA time to trigger all API calls
+  await page.waitForTimeout(3_000);
+
+  const classes = parseCalendarClasses(intercepted.calendarEvents);
+  const activities = parseCalendarActivities(intercepted.calendarActivities);
+
+  logger.info(
+    { classes: classes.length, activities: activities.length },
+    'Calendar scrape complete',
+  );
+
+  if (classes.length === 0 && activities.length === 0) {
+    await takeScreenshot(page, 'calendar-empty');
+    logger.warn('No calendar data captured — check interceptor');
   }
 
-  // Give the SPA extra time to populate events inside the grid
-  await page.waitForTimeout(2_000);
-
-  // Strategy 1: Use intercepted API data (preferred — more reliable than DOM parsing)
-  if (intercepted && intercepted.calendarEvents.length > 0) {
-    logger.info('Using intercepted calendar API data');
-    try {
-      return parseCalendarFromAPI(intercepted.calendarEvents);
-    } catch (error) {
-      logger.warn({ error }, 'Failed to parse intercepted calendar data, falling back to DOM');
-    }
-  }
-
-  // Strategy 2: DOM scraping
-  logger.info('Scraping calendar from DOM');
-  return scrapeCalendarFromDOM(page);
+  return { classes, activities };
 }
 
 // ============================================================
-// API-based parsing
+// Parse class sessions from /course/student/calendar
 // ============================================================
 
-function parseCalendarFromAPI(apiData: unknown[]): ClassData[] {
+function parseCalendarClasses(apiData: unknown[]): ClassData[] {
   const classes: ClassData[] = [];
 
-  for (const data of apiData) {
-    if (Array.isArray(data)) {
-      for (const item of data) {
-        try {
-          const classData = parseAPICalendarItem(item);
-          if (classData) classes.push(classData);
-        } catch {
-          // Skip items that don't match expected structure
-        }
-      }
-    } else if (data && typeof data === 'object') {
-      // Response may wrap the array in a property
-      for (const value of Object.values(data as Record<string, unknown>)) {
-        if (Array.isArray(value)) {
-          for (const item of value) {
-            try {
-              const classData = parseAPICalendarItem(item);
-              if (classData) classes.push(classData);
-            } catch {
-              // Skip
-            }
-          }
-        }
+  for (const response of apiData) {
+    const events = extractEvents(response);
+
+    for (const event of events) {
+      if (!event || typeof event !== 'object') continue;
+      const obj = event as Record<string, unknown>;
+
+      // Only real scheduled classes: type=CLASS and isLongLasting=false
+      if (obj['type'] !== 'CLASS') continue;
+      if (obj['isLongLasting'] === true) continue;
+
+      try {
+        const classData = parseClassEvent(obj);
+        if (classData) classes.push(classData);
+      } catch (err) {
+        logger.debug({ err, event: obj['title'] }, 'Failed to parse class event');
       }
     }
   }
 
-  logger.info({ count: classes.length }, 'Classes parsed from API data');
+  logger.info({ count: classes.length }, 'Classes parsed from calendar API');
   return classes;
 }
 
-function parseAPICalendarItem(item: unknown): ClassData | null {
-  if (!item || typeof item !== 'object') return null;
-  const obj = item as Record<string, unknown>;
+function parseClassEvent(obj: Record<string, unknown>): ClassData | null {
+  const id = obj['id'] as string;
+  const title = obj['title'] as string;
+  const startAt = obj['startAt'] as string;
+  const finishAt = obj['finishAt'] as string;
+  const modality = (obj['modality'] as string) ?? 'R';
 
-  // Try common field names that the real API might use
-  const name = (obj['name'] ?? obj['courseName'] ?? obj['title'] ?? obj['subject'] ?? '') as string;
-  if (!name) return null;
+  if (!id || !title || !startAt || !finishAt) return null;
 
-  const startTime = (obj['startTime'] ?? obj['start'] ?? obj['timeStart'] ?? '') as string;
-  const endTime = (obj['endTime'] ?? obj['end'] ?? obj['timeEnd'] ?? '') as string;
-  const day = (obj['day'] ?? obj['dayName'] ?? obj['weekDay'] ?? '') as string;
-  const room = (obj['room'] ?? obj['classroom'] ?? obj['location'] ?? '') as string;
-  const professor = (obj['professor'] ?? obj['teacher'] ?? obj['instructor'] ?? '') as string;
-  const zoomLink = (obj['zoomLink'] ?? obj['meetingUrl'] ?? obj['zoom'] ?? '') as string;
-  const section = (obj['section'] ?? obj['sectionCode'] ?? '') as string;
+  const metadata = (obj['metadata'] ?? {}) as Record<string, unknown>;
+  const courseId = (metadata['courseId'] as string) ?? '';
+  const sectionId = (metadata['sectionId'] as string) ?? '';
+  const zoomLink = (metadata['zoomLink'] as string | null) ?? undefined;
 
   return {
-    id: generateClassId(cleanText(name), day || 'Unknown', startTime ? parseTime(startTime) : '00:00'),
-    name: cleanText(name),
-    professor: professor ? cleanText(professor) : undefined,
-    day: day || 'Unknown',
-    startTime: startTime ? parseTime(startTime) : '00:00',
-    endTime: endTime ? parseTime(endTime) : '00:00',
-    room: room ? cleanText(room) : undefined,
+    id,
+    title: cleanText(title),
+    courseId,
+    sectionId,
+    modality,
+    startAt,
+    finishAt,
     zoomLink: zoomLink || undefined,
-    section: section ? cleanText(section) : undefined,
+    weekNumber: undefined,
+    isLongLasting: false,
   };
 }
 
 // ============================================================
-// DOM-based parsing (fallback)
+// Parse activities from /course/student/calendar/activities
 // ============================================================
 
-async function scrapeCalendarFromDOM(page: Page): Promise<ClassData[]> {
-  // Read the column header texts to build a map of column index -> day abbreviation
-  const dayHeaders = await page.$$eval('[role="columnheader"]', (headers) =>
-    headers.map((h, index) => ({
-      index,
-      text: (h.textContent ?? '').trim(),
-    })),
-  );
+function parseCalendarActivities(apiData: unknown[]): ActivityData[] {
+  const activities: ActivityData[] = [];
 
-  const dayMap: Record<number, string> = {};
-  for (const header of dayHeaders) {
-    // Header format: "Lun 23", "Mar 24", "Mié 25" — take the first word
-    const abbr = header.text.split(/\s+/)[0] ?? '';
-    dayMap[header.index] = abbr;
+  for (const response of apiData) {
+    const events = extractEvents(response);
+
+    for (const event of events) {
+      if (!event || typeof event !== 'object') continue;
+      const obj = event as Record<string, unknown>;
+
+      // Only activity events
+      if (obj['type'] !== 'ACTIVITY') continue;
+
+      try {
+        const activity = parseActivityEvent(obj);
+        if (activity) activities.push(activity);
+      } catch (err) {
+        logger.debug({ err, event: obj['title'] }, 'Failed to parse activity event');
+      }
+    }
   }
 
-  logger.info({ dayHeaders: dayHeaders.map((h) => h.text) }, 'Calendar day headers');
+  logger.info({ count: activities.length }, 'Activities parsed from calendar activities API');
+  return activities;
+}
 
-  // Extract raw event data from gridcells using page.evaluate for DOM access
-  const rawEvents = await page.evaluate(() => {
-    const grid = document.querySelector('[role="grid"]');
-    if (!grid) return [];
+function parseActivityEvent(obj: Record<string, unknown>): ActivityData | null {
+  const title = obj['title'] as string;
+  if (!title) return null;
 
-    const events: Array<{ columnIndex: number; texts: string[] }> = [];
+  const metadata = (obj['metadata'] ?? {}) as Record<string, unknown>;
 
-    // Iterate all rows that hold event data (skip the header rowgroup)
-    const rowgroups = grid.querySelectorAll('[role="rowgroup"]');
-    // Use the last rowgroup which contains the actual day cells (first is the header)
-    const bodyRowgroup = rowgroups[rowgroups.length - 1] ?? grid;
-    const rows = bodyRowgroup.querySelectorAll('[role="row"]');
+  const activityId = (metadata['activityId'] as string) ?? (obj['id'] as string);
+  if (!activityId) return null;
 
-    for (const row of rows) {
-      const cells = row.querySelectorAll('[role="gridcell"]');
+  const courseName = (metadata['courseName'] as string) ?? '';
+  const courseId = (metadata['courseId'] as string) ?? '';
+  const activityType = (metadata['activityType'] as string) ?? 'HOMEWORK';
+  const weekNumber = (metadata['weekNumber'] as number) ?? 0;
+  const studentStatus = (metadata['studentStatus'] as string) ?? 'PENDING';
+  const evaluationSystem = (metadata['evaluationSystem'] as string | null) ?? undefined;
 
-      cells.forEach((cell, colIndex) => {
-        // Events are clickable containers — the SPA sets cursor:pointer via inline style
-        // We look for elements with inline style containing "cursor" or direct p children
-        const clickables = cell.querySelectorAll('[style*="cursor"]');
+  // Real deadline is activityFinishAt from metadata
+  const finishAt =
+    (metadata['activityFinishAt'] as string) ??
+    (obj['finishAt'] as string) ??
+    '';
 
-        if (clickables.length === 0) {
-          // Fallback: look for cells that contain paragraphs with time info
-          const paragraphs = cell.querySelectorAll('p');
-          if (paragraphs.length >= 2) {
-            const texts = Array.from(paragraphs)
-              .map((p) => (p.textContent ?? '').trim())
-              .filter((t) => t.length > 0);
-            const hasTime = texts.some((t) => t.includes('a.m.') || t.includes('p.m.') || /\d:\d{2}/.test(t));
-            if (hasTime) {
-              events.push({ columnIndex: colIndex, texts });
-            }
-          }
-          return;
-        }
+  const publishAt =
+    (metadata['activityPublishAt'] as string) ??
+    (obj['startAt'] as string) ??
+    '';
 
-        for (const clickable of clickables) {
-          const paragraphs = clickable.querySelectorAll('p');
-          const texts = Array.from(paragraphs)
-            .map((p) => (p.textContent ?? '').trim())
-            .filter((t) => t.length > 0);
-          if (texts.length >= 2) {
-            events.push({ columnIndex: colIndex, texts });
-          }
-        }
-      });
+  if (!finishAt) return null;
+
+  return {
+    id: activityId,
+    title: cleanText(title),
+    activityType,
+    courseName: cleanText(courseName),
+    courseId,
+    publishAt,
+    finishAt,
+    weekNumber,
+    studentStatus,
+    evaluationSystem: evaluationSystem || undefined,
+    isQualificated: false, // from calendar we don't have this info
+  };
+}
+
+// ============================================================
+// Parse pending activities from /course/student/activities/pending/resume
+// ============================================================
+
+export function parsePendingActivities(apiData: unknown[]): ActivityData[] {
+  const activities: ActivityData[] = [];
+
+  for (const response of apiData) {
+    const items = extractArray(response);
+
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const obj = item as Record<string, unknown>;
+
+      try {
+        const activity = parsePendingActivityItem(obj);
+        if (activity) activities.push(activity);
+      } catch (err) {
+        logger.debug({ err }, 'Failed to parse pending activity');
+      }
+    }
+  }
+
+  logger.info({ count: activities.length }, 'Pending activities parsed from API');
+  return activities;
+}
+
+function parsePendingActivityItem(obj: Record<string, unknown>): ActivityData | null {
+  const activityId = obj['activityId'] as string;
+  const title = obj['activityTitle'] as string;
+  const finishAt = obj['finishAt'] as string;
+
+  if (!activityId || !title || !finishAt) return null;
+
+  const courseName = (obj['courseName'] as string) ?? '';
+  const courseId = (obj['courseId'] as string) ?? '';
+  const activityType = (obj['type'] as string) ?? 'HOMEWORK';
+  const weekNumber = (obj['weekNumber'] as number) ?? 0;
+  const activityStatus = (obj['activityStatusFinal'] as string) ?? 'PENDING';
+  const isQualificated = Boolean(obj['isQualificated']);
+
+  const publishAt = (obj['publishAt'] as string) ?? '';
+
+  // Normalize finishAt — sometimes has ".0" suffix
+  const finishAtClean = finishAt.replace(/\.0$/, '').trim();
+  const publishAtClean = publishAt.replace(/\.0$/, '').trim();
+
+  return {
+    id: activityId,
+    title: cleanText(title),
+    activityType,
+    courseName: cleanText(courseName),
+    courseId,
+    publishAt: publishAtClean,
+    finishAt: finishAtClean,
+    weekNumber,
+    studentStatus: activityStatus,
+    evaluationSystem: undefined,
+    isQualificated,
+  };
+}
+
+// ============================================================
+// Helpers
+// ============================================================
+
+function extractEvents(response: unknown): unknown[] {
+  if (!response || typeof response !== 'object') return [];
+  const obj = response as Record<string, unknown>;
+
+  // Structure: { data: { current_interval: { events: [...] } } }
+  if (obj['data'] && typeof obj['data'] === 'object') {
+    const data = obj['data'] as Record<string, unknown>;
+
+    if (data['current_interval'] && typeof data['current_interval'] === 'object') {
+      const interval = data['current_interval'] as Record<string, unknown>;
+      if (Array.isArray(interval['events'])) {
+        return interval['events'];
+      }
     }
 
-    return events;
-  });
-
-  logger.info({ rawEventsCount: rawEvents.length }, 'Raw events extracted from DOM');
-
-  const classes: ClassData[] = [];
-
-  for (const event of rawEvents) {
-    // Expected text layout per event:
-    //   texts[0] = "Individuo y Medio Ambiente 8144"  (course name + section code)
-    //   texts[1] = "10:00 a.m. - 10:45 a.m."          (time range)
-    //   texts[2] = "Virtual en vivo"                   (optional modality label)
-
-    if (event.texts.length < 2) continue;
-
-    const nameText = event.texts[0] ?? '';
-    const timeText = event.texts[1] ?? '';
-
-    // Only parse entries that have a proper time range — skip pure activity entries
-    const timeMatch = timeText.match(
-      /(\d{1,2}:\d{2}\s*[ap]\.?\s*m\.?)\s*[-\u2013]\s*(\d{1,2}:\d{2}\s*[ap]\.?\s*m\.?)/i,
-    );
-    if (!timeMatch) continue;
-
-    const startTime = parseTime(timeMatch[1] ?? '');
-    const endTime = parseTime(timeMatch[2] ?? '');
-
-    // Map column index to day name
-    const dayAbbr = dayMap[event.columnIndex] ?? '';
-    const day = (DAY_ABBREVIATIONS[dayAbbr] ?? dayAbbr) || 'Unknown';
-
-    // Strip the trailing section code (4-5 digit number) from the course name
-    const sectionMatch = nameText.match(/(\d{4,5})\s*$/);
-    const section = sectionMatch?.[1];
-    const name = cleanText(nameText.replace(/\s+\d{4,5}\s*$/, '').replace(/\s*\(.*?\)\s*$/, ''));
-
-    if (!name) continue;
-
-    classes.push({
-      id: generateClassId(name, day, startTime),
-      name,
-      day,
-      startTime,
-      endTime,
-      section,
-    });
+    // Try data directly as array
+    if (Array.isArray(data)) return data;
   }
 
-  logger.info({ count: classes.length }, 'Classes parsed from DOM');
-  return classes;
+  // Try top-level events
+  if (Array.isArray(obj['events'])) return obj['events'];
+
+  // Try as direct array
+  if (Array.isArray(response)) return response;
+
+  return [];
+}
+
+function extractArray(response: unknown): unknown[] {
+  if (!response || typeof response !== 'object') return [];
+  const obj = response as Record<string, unknown>;
+
+  // Structure: { data: [...] }
+  if (Array.isArray(obj['data'])) return obj['data'];
+
+  // Try as direct array
+  if (Array.isArray(response)) return response;
+
+  return [];
 }

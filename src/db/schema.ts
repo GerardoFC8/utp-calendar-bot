@@ -1,41 +1,50 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
 
 export const courses = sqliteTable('courses', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  code: text('code'),
-  section: text('section'),
-  professor: text('professor'),
-  zoomLink: text('zoom_link'),
-  internalUrl: text('internal_url'),
-  lastSeen: integer('last_seen', { mode: 'timestamp' }),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  id: text('id').primaryKey(),           // courseId from API
+  sectionId: text('section_id'),
+  name: text('name').notNull(),          // classroom field from API
+  classNumber: text('class_number'),
+  modality: text('modality'),            // VT = virtual 24/7, R = presencial/en vivo
+  acadCareer: text('acad_career'),       // PREG = real academic, PRED = institutional
+  period: text('period'),                // e.g. "2262" = academic period
+  teacherFirstName: text('teacher_first_name'),
+  teacherLastName: text('teacher_last_name'),
+  teacherEmail: text('teacher_email'),
+  progress: real('progress'),
+  lastSeen: integer('last_seen'),
+  createdAt: integer('created_at').$defaultFn(() => Date.now()),
 });
 
 export const classes = sqliteTable('classes', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  professor: text('professor'),
-  day: text('day').notNull(),
-  startTime: text('start_time').notNull(),
-  endTime: text('end_time').notNull(),
-  room: text('room'),
+  id: text('id').primaryKey(),           // API event id (uuid)
+  title: text('title').notNull(),
+  courseId: text('course_id'),           // FK reference to courses
+  sectionId: text('section_id'),
+  modality: text('modality'),            // R or VT
+  startAt: text('start_at').notNull(),   // ISO datetime "2026-03-28 18:30:00"
+  finishAt: text('finish_at').notNull(), // ISO datetime
   zoomLink: text('zoom_link'),
-  section: text('section'),
-  lastSeen: integer('last_seen', { mode: 'timestamp' }),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  weekNumber: integer('week_number'),
+  isLongLasting: integer('is_long_lasting').notNull().default(0), // 0/1 boolean
+  lastSeen: integer('last_seen'),
+  createdAt: integer('created_at').$defaultFn(() => Date.now()),
 });
 
-export const tasks = sqliteTable('tasks', {
-  id: text('id').primaryKey(),
-  name: text('name').notNull(),
-  subject: text('subject'),
-  dueDate: text('due_date').notNull(),
-  description: text('description'),
-  zoomLink: text('zoom_link'),
-  status: text('status').default('pending'),
-  lastSeen: integer('last_seen', { mode: 'timestamp' }),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+export const activities = sqliteTable('activities', {
+  id: text('id').primaryKey(),           // activityId from API
+  title: text('title').notNull(),
+  activityType: text('activity_type').notNull(), // FORUM, HOMEWORK, EVALUATION
+  courseName: text('course_name').notNull(),
+  courseId: text('course_id'),
+  publishAt: text('publish_at'),         // ISO datetime
+  finishAt: text('finish_at').notNull(), // ISO datetime — DEADLINE
+  weekNumber: integer('week_number'),
+  studentStatus: text('student_status'), // PENDING, IN_PROCESS, PROGRAMMED
+  evaluationSystem: text('evaluation_system'), // null or grading system name
+  isQualificated: integer('is_qualificated').notNull().default(0), // 0/1 boolean
+  lastSeen: integer('last_seen'),
+  createdAt: integer('created_at').$defaultFn(() => Date.now()),
 });
 
 export const changes = sqliteTable('changes', {
@@ -45,16 +54,17 @@ export const changes = sqliteTable('changes', {
   changeType: text('change_type').notNull(),
   oldValue: text('old_value'),
   newValue: text('new_value'),
-  detectedAt: integer('detected_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  detectedAt: integer('detected_at').$defaultFn(() => Date.now()),
 });
 
 export const scrapeLog = sqliteTable('scrape_log', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   status: text('status').notNull(),
   classesFound: integer('classes_found'),
-  tasksFound: integer('tasks_found'),
+  activitiesFound: integer('activities_found'),
+  coursesFound: integer('courses_found'),
   changesDetected: integer('changes_detected'),
   errorMessage: text('error_message'),
   duration: integer('duration'),
-  createdAt: integer('created_at', { mode: 'timestamp' }).$defaultFn(() => new Date()),
+  createdAt: integer('created_at').$defaultFn(() => Date.now()),
 });

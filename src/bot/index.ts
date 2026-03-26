@@ -32,11 +32,12 @@ export async function startBot(): Promise<Telegraf> {
 
   // Set bot commands menu
   await botInstance.telegram.setMyCommands([
-    { command: 'hoy', description: 'Clases y tareas de hoy' },
-    { command: 'manana', description: 'Clases y tareas de manana' },
+    { command: 'hoy', description: 'Clases y actividades de hoy' },
+    { command: 'manana', description: 'Clases y actividades de manana' },
     { command: 'semana', description: 'Horario semanal' },
     { command: 'cursos', description: 'Cursos activos' },
-    { command: 'tareas', description: 'Tareas pendientes' },
+    { command: 'actividades', description: 'Actividades pendientes' },
+    { command: 'pendientes', description: 'Actividades urgentes (3 dias)' },
     { command: 'zoom', description: 'Links de Zoom' },
     { command: 'refresh', description: 'Ejecutar scrape inmediato' },
     { command: 'status', description: 'Estado del bot' },

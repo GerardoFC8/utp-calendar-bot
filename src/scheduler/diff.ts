@@ -72,7 +72,7 @@ export function computeDiff(
 
 export function persistChanges(
   diff: DiffResult,
-  entityType: 'class' | 'task' | 'course'
+  entityType: 'class' | 'activity' | 'course'
 ): void {
   for (const entity of diff.added) {
     insertChange({

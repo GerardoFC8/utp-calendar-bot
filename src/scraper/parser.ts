@@ -1,55 +1,52 @@
-import { createHash } from 'node:crypto';
-
-// === Types ===
-export interface ClassData {
-  id: string;
-  name: string;
-  professor?: string;
-  day: string;
-  startTime: string;
-  endTime: string;
-  room?: string;
-  zoomLink?: string;
-  section?: string;
-}
-
-export interface TaskData {
-  id: string;
-  name: string;
-  subject?: string;
-  dueDate: string;  // ISO format: YYYY-MM-DD
-  description?: string;
-  zoomLink?: string;
-  status: 'pending' | 'done';
-}
+// ============================================================
+// Types — API-first data structures
+// ============================================================
 
 export interface CourseData {
-  id: string;
-  name: string;
-  code?: string;
-  section?: string;
-  professor?: string;
+  id: string;           // courseId from API
+  sectionId: string;
+  name: string;         // classroom field from API
+  classNumber: string;
+  modality: string;     // VT = virtual 24/7, R = en vivo
+  acadCareer: string;   // PREG = real academic, PRED = institutional
+  period: string;       // e.g. "2262" = 2026-1
+  teacherFirstName: string;
+  teacherLastName: string;
+  teacherEmail: string;
+  progress: number;
+}
+
+export interface ClassData {
+  id: string;           // API event uuid
+  title: string;
+  courseId: string;
+  sectionId: string;
+  modality: string;     // R or VT
+  startAt: string;      // ISO datetime "2026-03-28 18:30:00"
+  finishAt: string;     // ISO datetime
   zoomLink?: string;
-  internalUrl?: string;
+  weekNumber?: number;
+  isLongLasting: boolean;
 }
 
-// === ID Generators ===
-export function generateClassId(name: string, day: string, startTime: string): string {
-  const raw = `${name}-${day}-${startTime}`.toLowerCase().trim();
-  return createHash('sha256').update(raw).digest('hex').substring(0, 16);
+export interface ActivityData {
+  id: string;           // activityId from API
+  title: string;
+  activityType: string; // FORUM, HOMEWORK, EVALUATION
+  courseName: string;
+  courseId: string;
+  publishAt: string;    // ISO datetime
+  finishAt: string;     // ISO datetime — DEADLINE
+  weekNumber: number;
+  studentStatus: string;
+  evaluationSystem?: string;
+  isQualificated: boolean;
 }
 
-export function generateTaskId(name: string, dueDate: string): string {
-  const raw = `${name}-${dueDate}`.toLowerCase().trim();
-  return createHash('sha256').update(raw).digest('hex').substring(0, 16);
-}
+// ============================================================
+// Utility functions
+// ============================================================
 
-export function generateCourseId(name: string, section?: string): string {
-  const raw = `${name}-${section || 'default'}`.toLowerCase().trim();
-  return createHash('sha256').update(raw).digest('hex').substring(0, 16);
-}
-
-// === Parsers ===
 export function cleanText(text: string | null | undefined): string {
   if (!text) return '';
   return text.replace(/\s+/g, ' ').trim();
@@ -94,13 +91,6 @@ export function parseDate(dateStr: string): string {
     return `${matchDMY[3]}-${matchDMY[2].padStart(2, '0')}-${matchDMY[1].padStart(2, '0')}`;
   }
 
-  // MM/DD/YYYY
-  const matchMDY = cleaned.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (matchMDY) {
-    // Assume DD/MM/YYYY for Peru locale
-    return `${matchMDY[3]}-${matchMDY[2].padStart(2, '0')}-${matchMDY[1].padStart(2, '0')}`;
-  }
-
   return cleaned;
 }
 
@@ -114,54 +104,22 @@ export function getDayName(date: Date): string {
   return days[date.getDay()];
 }
 
-export function parseClassesFromDOM(elements: Array<{
-  title?: string;
-  time?: string;
-  detail?: string;
-  room?: string;
-  professor?: string;
-  zoomLink?: string;
-}>): ClassData[] {
-  return elements
-    .filter((el) => el.title && el.time)
-    .map((el) => {
-      const name = cleanText(el.title);
-      const timeRange = cleanText(el.time);
-      const [startTime, endTime] = timeRange.split('-').map((t) => parseTime(t.trim()));
-      const day = getDayName(new Date()); // Will be overridden with actual day from calendar
-
-      return {
-        id: generateClassId(name, day, startTime || '00:00'),
-        name,
-        professor: el.professor ? cleanText(el.professor) : undefined,
-        day,
-        startTime: startTime || '00:00',
-        endTime: endTime || '00:00',
-        room: el.room ? cleanText(el.room) : undefined,
-        zoomLink: el.zoomLink || (el.detail ? extractZoomLink(el.detail) : undefined),
-      };
-    });
+// Extract the date part "YYYY-MM-DD" from an ISO datetime string
+export function extractDatePart(datetime: string): string {
+  return datetime.split(' ')[0] ?? datetime.split('T')[0] ?? datetime;
 }
 
-export function parseTasksFromDOM(elements: Array<{
-  title?: string;
-  dueDate?: string;
-  subject?: string;
-  description?: string;
-}>): TaskData[] {
-  return elements
-    .filter((el) => el.title && el.dueDate)
-    .map((el) => {
-      const name = cleanText(el.title);
-      const dueDate = parseDate(cleanText(el.dueDate));
+// Extract the time part "HH:MM" from an ISO datetime string "YYYY-MM-DD HH:MM:SS"
+export function extractTimePart(datetime: string): string {
+  const parts = datetime.split(' ');
+  if (parts.length >= 2) {
+    const timeParts = (parts[1] ?? '').split(':');
+    return `${timeParts[0] ?? '00'}:${timeParts[1] ?? '00'}`;
+  }
+  return '00:00';
+}
 
-      return {
-        id: generateTaskId(name, dueDate),
-        name,
-        subject: el.subject ? cleanText(el.subject) : undefined,
-        dueDate,
-        description: el.description ? cleanText(el.description) : undefined,
-        status: 'pending' as const,
-      };
-    });
+// Format an ISO datetime like "2026-03-28 18:30:00" to "18:30"
+export function formatTime(datetime: string): string {
+  return extractTimePart(datetime);
 }

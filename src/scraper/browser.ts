@@ -25,7 +25,7 @@ export async function createBrowser(): Promise<Browser> {
 
 export async function createContext(browser: Browser): Promise<BrowserContext> {
   const contextOptions: Parameters<Browser['newContext']>[0] = {
-    viewport: { width: 1280, height: 720 },
+    viewport: { width: 1920, height: 1080 },
     userAgent: USER_AGENT,
     locale: 'es-PE',
     timezoneId: 'America/Lima',

@@ -1,16 +1,51 @@
 import { Telegraf } from 'telegraf';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { getClassesByDay, getPendingTasks } from '../db/queries.js';
-import { getDayName } from '../scraper/parser.js';
+import { getClassesForDate, getPendingActivities } from '../db/queries.js';
+import type { ClassRow, ActivityRow } from '../db/queries.js';
 import {
   formatDailySchedule,
   formatChangeNotification,
   escapeMarkdown,
 } from './formatters.js';
-import type { ClassData, TaskData } from '../scraper/parser.js';
+import type { ClassData, ActivityData } from '../scraper/parser.js';
 
-export async function sendMessage(bot: Telegraf, text: string, parseMode: 'MarkdownV2' | 'HTML' = 'MarkdownV2'): Promise<void> {
+function mapClassRow(row: ClassRow): ClassData {
+  return {
+    id: row.id,
+    title: row.title,
+    courseId: row.courseId ?? '',
+    sectionId: row.sectionId ?? '',
+    modality: row.modality ?? 'R',
+    startAt: row.startAt,
+    finishAt: row.finishAt,
+    zoomLink: row.zoomLink ?? undefined,
+    weekNumber: row.weekNumber ?? undefined,
+    isLongLasting: Boolean(row.isLongLasting),
+  };
+}
+
+function mapActivityRow(row: ActivityRow): ActivityData {
+  return {
+    id: row.id,
+    title: row.title,
+    activityType: row.activityType,
+    courseName: row.courseName,
+    courseId: row.courseId ?? '',
+    publishAt: row.publishAt ?? '',
+    finishAt: row.finishAt,
+    weekNumber: row.weekNumber ?? 0,
+    studentStatus: row.studentStatus ?? 'PENDING',
+    evaluationSystem: row.evaluationSystem ?? undefined,
+    isQualificated: Boolean(row.isQualificated),
+  };
+}
+
+export async function sendMessage(
+  bot: Telegraf,
+  text: string,
+  parseMode: 'MarkdownV2' | 'HTML' = 'MarkdownV2',
+): Promise<void> {
   try {
     await bot.telegram.sendMessage(config.TELEGRAM_CHAT_ID, text, {
       parse_mode: parseMode,
@@ -21,7 +56,7 @@ export async function sendMessage(bot: Telegraf, text: string, parseMode: 'Markd
     // Retry without markdown if formatting fails
     if (parseMode === 'MarkdownV2') {
       try {
-        const plainText = text.replace(/[\\*_`\[\]()~>#+\-=|{}.!]/g, '');
+        const plainText = text.replace(/[\\*_`[\]()~>#+\-=|{}.!]/g, '');
         await bot.telegram.sendMessage(config.TELEGRAM_CHAT_ID, plainText);
       } catch (retryError) {
         logger.error({ retryError }, 'Failed to send plain text message too');
@@ -32,45 +67,42 @@ export async function sendMessage(bot: Telegraf, text: string, parseMode: 'Markd
 
 export async function sendMorningReminder(bot: Telegraf): Promise<void> {
   const today = new Date();
-  const dayName = getDayName(today);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const todayStr = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
 
-  const classes = getClassesByDay(dayName) as ClassData[];
-  const allTasks = getPendingTasks() as TaskData[];
+  const classes = getClassesForDate(todayStr).map(mapClassRow) as ClassData[];
+  const allActivities = getPendingActivities().map(mapActivityRow) as ActivityData[];
 
-  // Filter tasks relevant for today
-  const todayStr = today.toISOString().split('T')[0];
-  const relevantTasks = allTasks.filter((t) => {
-    return t.dueDate <= todayStr || daysUntilDate(t.dueDate) <= 3;
+  // Filter activities due today
+  const todayActivities = allActivities.filter((a) => {
+    const activityDate = a.finishAt.split(' ')[0] ?? '';
+    return activityDate === todayStr;
   });
 
-  if (classes.length === 0 && relevantTasks.length === 0) {
-    logger.info('No classes or tasks today, skipping morning reminder');
+  if (classes.length === 0 && todayActivities.length === 0) {
+    logger.info('No classes or activities today, skipping morning reminder');
     return;
   }
 
-  const message = formatDailySchedule(
-    today,
-    classes,
-    relevantTasks,
-    'Buenos dias'
-  );
+  const message = formatDailySchedule(today, classes, todayActivities, 'Buenos dias');
 
   await sendMessage(bot, message);
   logger.info('Morning reminder sent');
 }
 
 export async function sendClassReminder(bot: Telegraf, classData: ClassData): Promise<void> {
-  const name = escapeMarkdown(classData.name);
-  const time = escapeMarkdown(classData.startTime);
+  const title = escapeMarkdown(classData.title);
+  const timeParts = classData.startAt.split(' ');
+  const time = escapeMarkdown(timeParts[1]?.substring(0, 5) ?? classData.startAt);
 
-  let message = `En ${config.CLASS_REMINDER_MINUTES} minutos: *${name}* \\(${time}\\)`;
+  let message = `En ${config.CLASS_REMINDER_MINUTES} minutos: *${title}* \\(${time}\\)`;
 
   if (classData.zoomLink) {
-    message += `\n[Unirse a Zoom](${escapeMarkdown(classData.zoomLink)})`;
+    message += `\n[Unirse a Zoom](${classData.zoomLink})`;
   }
 
   await sendMessage(bot, message);
-  logger.info({ class: classData.name }, 'Class reminder sent');
+  logger.info({ class: classData.title }, 'Class reminder sent');
 }
 
 export async function sendChangeNotifications(
@@ -80,7 +112,7 @@ export async function sendChangeNotifications(
     entityType: string;
     newValue?: string | null;
     oldValue?: string | null;
-  }>
+  }>,
 ): Promise<void> {
   if (changesData.length === 0) return;
 
@@ -98,10 +130,4 @@ export async function sendChangeNotifications(
 
   await sendMessage(bot, lines.join('\n'));
   logger.info({ count: changesData.length }, 'Change notifications sent');
-}
-
-function daysUntilDate(dateStr: string): number {
-  const now = new Date();
-  const target = new Date(dateStr + 'T00:00:00');
-  return Math.ceil((target.getTime() - now.getTime()) / 86_400_000);
 }

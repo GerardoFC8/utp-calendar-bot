@@ -24,42 +24,53 @@ export function initDatabase(): typeof db {
 
   db = drizzle(sqlite, { schema });
 
-  // Create tables directly using SQL (no migration files needed for initial setup)
+  // Drop old tables from previous schema and create new ones
   sqlite.exec(`
+    DROP TABLE IF EXISTS tasks;
+
     CREATE TABLE IF NOT EXISTS courses (
       id TEXT PRIMARY KEY,
+      section_id TEXT,
       name TEXT NOT NULL,
-      code TEXT,
-      section TEXT,
-      professor TEXT,
-      zoom_link TEXT,
-      internal_url TEXT,
+      class_number TEXT,
+      modality TEXT,
+      acad_career TEXT,
+      period TEXT,
+      teacher_first_name TEXT,
+      teacher_last_name TEXT,
+      teacher_email TEXT,
+      progress REAL,
       last_seen INTEGER,
       created_at INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS classes (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      professor TEXT,
-      day TEXT NOT NULL,
-      start_time TEXT NOT NULL,
-      end_time TEXT NOT NULL,
-      room TEXT,
+      title TEXT NOT NULL,
+      course_id TEXT,
+      section_id TEXT,
+      modality TEXT,
+      start_at TEXT NOT NULL,
+      finish_at TEXT NOT NULL,
       zoom_link TEXT,
-      section TEXT,
+      week_number INTEGER,
+      is_long_lasting INTEGER NOT NULL DEFAULT 0,
       last_seen INTEGER,
       created_at INTEGER
     );
 
-    CREATE TABLE IF NOT EXISTS tasks (
+    CREATE TABLE IF NOT EXISTS activities (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      subject TEXT,
-      due_date TEXT NOT NULL,
-      description TEXT,
-      zoom_link TEXT,
-      status TEXT DEFAULT 'pending',
+      title TEXT NOT NULL,
+      activity_type TEXT NOT NULL,
+      course_name TEXT NOT NULL,
+      course_id TEXT,
+      publish_at TEXT,
+      finish_at TEXT NOT NULL,
+      week_number INTEGER,
+      student_status TEXT,
+      evaluation_system TEXT,
+      is_qualificated INTEGER NOT NULL DEFAULT 0,
       last_seen INTEGER,
       created_at INTEGER
     );
@@ -78,7 +89,8 @@ export function initDatabase(): typeof db {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       status TEXT NOT NULL,
       classes_found INTEGER,
-      tasks_found INTEGER,
+      activities_found INTEGER,
+      courses_found INTEGER,
       changes_detected INTEGER,
       error_message TEXT,
       duration INTEGER,
