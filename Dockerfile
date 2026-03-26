@@ -20,8 +20,10 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 
 # Create directory for persistent data (SQLite + session state)
+# NOTE: do NOT use VOLUME here — persistence is handled by docker-compose.yml
+# (bot-data named volume). A VOLUME instruction in Dockerfile creates an
+# anonymous volume that shadows the named volume on every rebuild.
 RUN mkdir -p /app/data
-VOLUME /app/data
 
 # Default environment variables
 ENV NODE_ENV=production
