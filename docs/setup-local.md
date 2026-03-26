@@ -21,7 +21,7 @@ No necesitas Docker. El bot corre directamente con Node.js.
 ## 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/tu-usuario/utp-calendar-bot.git
+git clone https://github.com/GerardoFC8/utp-calendar-bot.git
 cd utp-calendar-bot
 ```
 

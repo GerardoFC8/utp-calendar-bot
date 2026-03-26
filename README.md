@@ -45,7 +45,7 @@ Este bot automatiza todo eso:
 ### Opcion 1: Local sin Docker
 
 ```bash
-git clone <url-del-repo>
+git clone https://github.com/GerardoFC8/utp-calendar-bot.git
 cd utp-calendar-bot
 npm install
 npx playwright install chromium
@@ -59,7 +59,7 @@ Guia completa: [`docs/setup-local.md`](docs/setup-local.md)
 ### Opcion 2: Docker local
 
 ```bash
-git clone <url-del-repo>
+git clone https://github.com/GerardoFC8/utp-calendar-bot.git
 cd utp-calendar-bot
 cp .env.example .env
 # Edita .env con tus credenciales
