@@ -8,6 +8,14 @@
       "sessions": 3,
       "memories": 20,
       "prompts": 1
+    },
+    {
+      "id": "35a161b1",
+      "created_by": "gerardofc",
+      "created_at": "2026-03-26T13:33:40Z",
+      "sessions": 4,
+      "memories": 5,
+      "prompts": 13
     }
   ]
 }
