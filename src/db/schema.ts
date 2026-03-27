@@ -79,3 +79,20 @@ export const sentReminders = sqliteTable(
   },
   (table) => [uniqueIndex('sent_reminders_class_date_idx').on(table.classId, table.dateStr)],
 );
+
+export const sentActivityReminders = sqliteTable(
+  'sent_activity_reminders',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    activityId: text('activity_id').notNull(),
+    reminderType: text('reminder_type').notNull(), // '24h' or '2h'
+    sentAt: integer('sent_at').$defaultFn(() => Date.now()),
+  },
+  (table) => [uniqueIndex('sent_activity_reminders_idx').on(table.activityId, table.reminderType)],
+);
+
+export const botSettings = sqliteTable('bot_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: integer('updated_at').$defaultFn(() => Date.now()),
+});

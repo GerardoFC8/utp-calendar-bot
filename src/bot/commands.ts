@@ -11,6 +11,8 @@ import {
   getAllCourses,
   getScrapeStats,
   getLastScrapeLog,
+  setSetting,
+  getAllSettings,
 } from '../db/queries.js';
 import {
   escapeMarkdown,
@@ -24,6 +26,7 @@ import {
   formatRefreshResult,
   formatReporteTxt,
   formatResumen,
+  formatConfigMenu,
   splitMessage,
 } from './formatters.js';
 // sendMessage is available for external callers if needed
@@ -156,6 +159,7 @@ export function registerCommands(bot: Telegraf): void {
       '/reporte \\- Exportar actividades completas como archivo TXT',
       '/zoom \\- Links de Zoom',
       '/refresh \\- Ejecutar scrape inmediato',
+      '/config \\- Ver o cambiar configuracion',
       '/status \\- Estado del bot',
       '/help \\- Lista de comandos',
     ].join('\n');
@@ -420,6 +424,74 @@ export function registerCommands(bot: Telegraf): void {
     );
   });
 
+  bot.command('config', async (ctx) => {
+    const text = ctx.message?.text ?? '';
+    const parts = text.split(' ').slice(1);
+
+    const VALID_KEYS = new Set([
+      'reminder_class_minutes',
+      'reminder_deadline_24h',
+      'reminder_deadline_2h',
+      'morning_hour',
+    ]);
+
+    if (parts.length === 0) {
+      // Show current settings
+      const settings = getAllSettings();
+      const message = formatConfigMenu(settings);
+      await ctx.reply(message, { parse_mode: 'MarkdownV2' });
+      return;
+    }
+
+    if (parts.length < 2) {
+      await ctx.reply(
+        'Uso: /config \\<clave\\> \\<valor\\>\nEjemplo: /config morning\\_hour 7',
+        { parse_mode: 'MarkdownV2' },
+      );
+      return;
+    }
+
+    const key = parts[0]!;
+    const value = parts[1]!;
+
+    if (!VALID_KEYS.has(key)) {
+      const validList = [...VALID_KEYS].map(k => escapeMarkdown(k)).join(', ');
+      await ctx.reply(
+        `Clave invalida\\. Claves validas: ${validList}`,
+        { parse_mode: 'MarkdownV2' },
+      );
+      return;
+    }
+
+    // Validate value per key
+    if (key === 'reminder_class_minutes' || key === 'morning_hour') {
+      const num = parseInt(value, 10);
+      if (isNaN(num) || num < 0) {
+        await ctx.reply('El valor debe ser un numero positivo\\.', { parse_mode: 'MarkdownV2' });
+        return;
+      }
+      if (key === 'morning_hour' && (num < 0 || num > 23)) {
+        await ctx.reply('La hora debe estar entre 0 y 23\\.', { parse_mode: 'MarkdownV2' });
+        return;
+      }
+    }
+
+    if (key === 'reminder_deadline_24h' || key === 'reminder_deadline_2h') {
+      if (value !== 'true' && value !== 'false') {
+        await ctx.reply('El valor debe ser `true` o `false`\\.', { parse_mode: 'MarkdownV2' });
+        return;
+      }
+    }
+
+    setSetting(key, value);
+    logger.info({ key, value }, 'Bot setting updated via /config');
+
+    await ctx.reply(
+      `Configuracion actualizada: ${escapeMarkdown(key)} \\= ${escapeMarkdown(value)}`,
+      { parse_mode: 'MarkdownV2' },
+    );
+  });
+
   bot.command('help', async (ctx) => {
     const message = [
       '*Comandos disponibles:*',
@@ -434,6 +506,7 @@ export function registerCommands(bot: Telegraf): void {
       '/reporte \\- Exportar actividades completas como archivo TXT',
       '/zoom \\- Links de Zoom de clases proximas',
       '/refresh \\- Ejecutar scrape inmediato',
+      '/config \\- Ver o cambiar configuracion del bot',
       '/status \\- Estado del bot y ultimo scrape',
       '/help \\- Esta lista de comandos',
     ].join('\n');

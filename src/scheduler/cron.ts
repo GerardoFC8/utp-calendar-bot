@@ -9,7 +9,7 @@ import { scrapeCourses } from '../scraper/courses.js';
 import { createInterceptor, logDiscoveredEndpoints } from '../scraper/interceptor.js';
 import { deduplicateActivities } from '../scraper/tasks.js';
 import { computeDiff, persistChanges } from './diff.js';
-import { checkUpcomingClasses } from './reminders.js';
+import { checkUpcomingClasses, checkUpcomingDeadlines } from './reminders.js';
 import { sendMorningReminder, sendChangeNotifications } from '../bot/notifications.js';
 import {
   getAllClasses,
@@ -228,4 +228,17 @@ export function startScheduler(bot: Telegraf): void {
   });
 
   logger.info({ minutes: config.CLASS_REMINDER_MINUTES }, 'Class reminder checker started');
+
+  // Activity deadline reminders (check every 15 minutes)
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      await checkUpcomingDeadlines(bot);
+    } catch (error) {
+      logger.error({ error }, 'Deadline reminder check failed');
+    }
+  }, {
+    timezone: config.TZ,
+  });
+
+  logger.info('Activity deadline reminder checker started');
 }

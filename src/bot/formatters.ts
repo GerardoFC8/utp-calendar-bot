@@ -530,6 +530,81 @@ export function formatChangeNotification(change: {
 }
 
 // ============================================================
+// Deadline reminder formatter
+// ============================================================
+
+export function formatDeadlineReminder(activity: ActivityData, hoursLeft: number): string {
+  const lines: string[] = [];
+  const title = escapeMarkdown(activity.title);
+  const course = escapeMarkdown(shortenCourseName(activity.courseName));
+  const deadline = escapeMarkdown(formatDeadline(activity.finishAt));
+
+  const typeLabels: Record<string, string> = {
+    HOMEWORK: 'Tarea',
+    FORUM: 'Foro',
+    EVALUATION: 'Evaluacion',
+  };
+  const typeLabel = escapeMarkdown(typeLabels[activity.activityType] ?? activity.activityType);
+
+  if (hoursLeft <= 2) {
+    lines.push(`\u26a0\ufe0f *URGENTE \\- Vence en ${hoursLeft}h:*`);
+  } else {
+    lines.push(`\u23f0 *Recordatorio \\- Vence en ${hoursLeft}h:*`);
+  }
+  lines.push('');
+  lines.push(`${typeLabel}: *${title}*`);
+  lines.push(`Curso: ${course}`);
+  lines.push(`Fecha limite: ${deadline}`);
+
+  return lines.join('\n');
+}
+
+// ============================================================
+// Config menu formatter
+// ============================================================
+
+export function formatConfigMenu(settings: Record<string, string>): string {
+  const lines: string[] = [];
+
+  const SETTING_DESCRIPTIONS: Record<string, string> = {
+    reminder_class_minutes: 'Minutos antes de la clase para recordatorio',
+    reminder_deadline_24h: 'Recordatorio 24h antes de deadline',
+    reminder_deadline_2h: 'Recordatorio 2h antes de deadline',
+    morning_hour: 'Hora del recordatorio matutino \\(0\\-23\\)',
+  };
+
+  const SETTING_DEFAULTS: Record<string, string> = {
+    reminder_class_minutes: '30',
+    reminder_deadline_24h: 'true',
+    reminder_deadline_2h: 'true',
+    morning_hour: '6',
+  };
+
+  const SETTING_ORDER = [
+    'reminder_class_minutes',
+    'reminder_deadline_24h',
+    'reminder_deadline_2h',
+    'morning_hour',
+  ];
+
+  lines.push('*Configuracion actual:*');
+  lines.push('');
+
+  SETTING_ORDER.forEach((key, index) => {
+    const value = settings[key] ?? SETTING_DEFAULTS[key] ?? '\\-';
+    const desc = SETTING_DESCRIPTIONS[key] ?? key;
+    lines.push(`${index + 1}\\. ${escapeMarkdown(key)}: ${escapeMarkdown(value)}`);
+    lines.push(`   _${desc}_`);
+  });
+
+  lines.push('');
+  lines.push('Uso: /config \\<clave\\> \\<valor\\>');
+  lines.push('Ejemplo: /config morning\\_hour 7');
+
+  return lines.join('\n');
+}
+
+// ============================================================
 // Helpers
 // ============================================================
 

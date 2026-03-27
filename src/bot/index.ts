@@ -13,6 +13,16 @@ export function createBot(): Telegraf {
     logger.error({ error, updateType: ctx.updateType }, 'Bot error');
   });
 
+  // Auth middleware — reject messages from unknown chats
+  bot.use((ctx, next) => {
+    const chatId = ctx.chat?.id?.toString();
+    if (chatId !== config.TELEGRAM_CHAT_ID) {
+      logger.warn({ chatId, allowed: config.TELEGRAM_CHAT_ID }, 'Unauthorized access attempt');
+      return; // silently ignore
+    }
+    return next();
+  });
+
   // Register all commands
   registerCommands(bot);
 
@@ -42,6 +52,7 @@ export async function startBot(): Promise<Telegraf> {
     { command: 'reporte', description: 'Exportar actividades como TXT' },
     { command: 'zoom', description: 'Links de Zoom' },
     { command: 'refresh', description: 'Ejecutar scrape inmediato' },
+    { command: 'config', description: 'Ver o cambiar configuracion del bot' },
     { command: 'status', description: 'Estado del bot' },
     { command: 'help', description: 'Lista de comandos' },
   ]);

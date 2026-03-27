@@ -104,6 +104,22 @@ export function initDatabase(): typeof db {
 
     CREATE UNIQUE INDEX IF NOT EXISTS sent_reminders_class_date_idx
       ON sent_reminders (class_id, date_str);
+
+    CREATE TABLE IF NOT EXISTS sent_activity_reminders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      activity_id TEXT NOT NULL,
+      reminder_type TEXT NOT NULL,
+      sent_at INTEGER
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS sent_activity_reminders_idx
+      ON sent_activity_reminders (activity_id, reminder_type);
+
+    CREATE TABLE IF NOT EXISTS bot_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER
+    );
   `);
 
   logger.info({ path: dbPath }, 'Database initialized');

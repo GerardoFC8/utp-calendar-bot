@@ -1,6 +1,6 @@
 import { desc, sql, gte, lte, and, inArray, lt, like } from 'drizzle-orm';
 import { getDatabase } from './index.js';
-import { courses, classes, activities, changes, scrapeLog, sentReminders } from './schema.js';
+import { courses, classes, activities, changes, scrapeLog, sentReminders, sentActivityReminders, botSettings } from './schema.js';
 
 // === Courses ===
 
@@ -243,6 +243,64 @@ export function markReminderSent(classId: string, dateStr: string): void {
 export function cleanOldReminders(beforeDateStr: string): void {
   const db = getDatabase();
   db.delete(sentReminders).where(lt(sentReminders.dateStr, beforeDateStr)).run();
+}
+
+// === Sent Activity Reminders ===
+
+export function hasActivityReminderBeenSent(activityId: string, reminderType: string): boolean {
+  const db = getDatabase();
+  const result = db
+    .select({ count: sql<number>`count(*)` })
+    .from(sentActivityReminders)
+    .where(and(
+      sql`${sentActivityReminders.activityId} = ${activityId}`,
+      sql`${sentActivityReminders.reminderType} = ${reminderType}`,
+    ))
+    .get();
+  return (result?.count ?? 0) > 0;
+}
+
+export function markActivityReminderSent(activityId: string, reminderType: string): void {
+  const db = getDatabase();
+  db.insert(sentActivityReminders).values({ activityId, reminderType }).onConflictDoNothing().run();
+}
+
+export function cleanOldActivityReminders(): void {
+  const db = getDatabase();
+  const now = new Date();
+  const nowStr = formatDatetime(now);
+  db.run(sql`
+    DELETE FROM sent_activity_reminders
+    WHERE activity_id IN (
+      SELECT id FROM activities WHERE finish_at < ${nowStr}
+    )
+  `);
+}
+
+// === Bot Settings ===
+
+export function getSetting(key: string): string | null {
+  const db = getDatabase();
+  const result = db.select().from(botSettings).where(sql`${botSettings.key} = ${key}`).get();
+  return result?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  const db = getDatabase();
+  db.insert(botSettings)
+    .values({ key, value })
+    .onConflictDoUpdate({ target: botSettings.key, set: { value, updatedAt: Date.now() } })
+    .run();
+}
+
+export function getAllSettings(): Record<string, string> {
+  const db = getDatabase();
+  const rows = db.select().from(botSettings).all();
+  const result: Record<string, string> = {};
+  for (const row of rows) {
+    result[row.key] = row.value;
+  }
+  return result;
 }
 
 // === Helpers ===

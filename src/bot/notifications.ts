@@ -6,6 +6,7 @@ import type { ClassRow, ActivityRow } from '../db/queries.js';
 import {
   formatDailySchedule,
   formatChangeNotification,
+  formatDeadlineReminder,
   escapeMarkdown,
 } from './formatters.js';
 import type { ClassData, ActivityData } from '../scraper/parser.js';
@@ -103,6 +104,16 @@ export async function sendClassReminder(bot: Telegraf, classData: ClassData): Pr
 
   await sendMessage(bot, message);
   logger.info({ class: classData.title }, 'Class reminder sent');
+}
+
+export async function sendDeadlineReminder(
+  bot: Telegraf,
+  activity: ActivityData,
+  hoursLeft: number,
+): Promise<void> {
+  const message = formatDeadlineReminder(activity, hoursLeft);
+  await sendMessage(bot, message);
+  logger.info({ activity: activity.title, hoursLeft }, 'Deadline reminder sent');
 }
 
 export async function sendChangeNotifications(
