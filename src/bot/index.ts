@@ -46,19 +46,19 @@ export async function startBot(): Promise<Telegraf> {
     { command: 'help', description: 'Lista de comandos' },
   ]);
 
-  // Start polling — if another instance is already running Telegram returns
-  // 409 Conflict. In that case exit(0) so restart:always does NOT re-launch us
-  // (restart only triggers on non-zero exit codes by default).
-  try {
-    await botInstance.launch();
-  } catch (error: unknown) {
+  // Start polling — fire-and-forget pattern (Telegraf documented).
+  // launch() returns a Promise that NEVER resolves (infinite polling loop),
+  // so we must NOT await it — otherwise startScheduler() never runs.
+  // Errors (including 409 Conflict from another instance) are caught in .catch().
+  botInstance.launch().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('409')) {
-      logger.warn('Another bot instance is already running (409 Conflict). Exiting cleanly — will not restart.');
+      logger.warn('Another bot instance is already running (409 Conflict). Exiting cleanly.');
       process.exit(0);
     }
-    throw error;
-  }
+    logger.fatal({ error }, 'Bot launch failed');
+    process.exit(1);
+  });
 
   logger.info('Telegram bot started');
   return botInstance;

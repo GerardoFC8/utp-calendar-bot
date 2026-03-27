@@ -21,4 +21,5 @@ services:
 
 volumes:
   bot-data:
+    name: utp-calendar-bot-data
     driver: local

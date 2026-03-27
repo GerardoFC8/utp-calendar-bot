@@ -24,10 +24,8 @@ export function initDatabase(): typeof db {
 
   db = drizzle(sqlite, { schema });
 
-  // Drop old tables from previous schema and create new ones
+  // Create tables (idempotent — IF NOT EXISTS)
   sqlite.exec(`
-    DROP TABLE IF EXISTS tasks;
-
     CREATE TABLE IF NOT EXISTS courses (
       id TEXT PRIMARY KEY,
       section_id TEXT,
