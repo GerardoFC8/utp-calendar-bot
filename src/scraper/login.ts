@@ -8,7 +8,7 @@ export async function login(page: Page, context: BrowserContext): Promise<void> 
   const loginUrl = config.UTP_BASE_URL;
   logger.info({ url: loginUrl }, 'Navigating to login page');
 
-  await page.goto(loginUrl, { waitUntil: 'networkidle' });
+  await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
 
   // Wait for the login form to render (SPA)
   // The platform might redirect to Microsoft SSO
@@ -216,7 +216,7 @@ async function handleMicrosoftSSO(page: Page): Promise<void> {
 
 export async function isLoggedIn(page: Page): Promise<boolean> {
   try {
-    await page.goto(config.UTP_BASE_URL, { waitUntil: 'networkidle' });
+    await page.goto(config.UTP_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     const indicator = await page.$(SELECTORS.loggedInIndicator);
     return indicator !== null;
   } catch {

@@ -12,9 +12,12 @@ export async function scrapeCourses(
   const coursesUrl = `${config.UTP_BASE_URL}${config.UTP_COURSES_PATH}`;
   logger.info({ url: coursesUrl }, 'Navigating to courses');
 
-  await page.goto(coursesUrl, { waitUntil: 'networkidle' });
-  // Extra wait for the SPA to trigger the dashboard-courses API call
-  await page.waitForTimeout(3_000);
+  // Use 'domcontentloaded' — the SPA never reaches 'networkidle' due to
+  // background requests (analytics, keep-alive). The data we need comes from
+  // intercepted API calls, not from the DOM.
+  await page.goto(coursesUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  // Wait for the SPA to trigger the dashboard-courses API call
+  await page.waitForTimeout(5_000);
 
   if (intercepted.courses.length === 0) {
     await takeScreenshot(page, 'courses-no-api-data');

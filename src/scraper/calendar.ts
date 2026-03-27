@@ -12,10 +12,12 @@ export async function scrapeCalendar(
   const calendarUrl = `${config.UTP_BASE_URL}${config.UTP_CALENDAR_PATH}`;
   logger.info({ url: calendarUrl }, 'Navigating to calendar');
 
-  await page.goto(calendarUrl, { waitUntil: 'networkidle' });
-
-  // Give the SPA time to trigger all API calls
-  await page.waitForTimeout(3_000);
+  // Use 'domcontentloaded' — the SPA never reaches 'networkidle' due to
+  // background requests (analytics, keep-alive). The data we need comes from
+  // intercepted API calls, not from the DOM.
+  await page.goto(calendarUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  // Wait for the SPA to trigger all API calls
+  await page.waitForTimeout(5_000);
 
   const classes = parseCalendarClasses(intercepted.calendarEvents);
   const activities = parseCalendarActivities(intercepted.calendarActivities);
