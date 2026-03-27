@@ -10,8 +10,27 @@ export async function login(page: Page, context: BrowserContext): Promise<void> 
 
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
 
-  // Wait for the login form to render (SPA)
-  // The platform might redirect to Microsoft SSO
+  // The SPA at class.utp.edu.pe triggers a redirect chain:
+  //   class.utp.edu.pe → sso.utp.edu.pe (Keycloak) → fill creds → back to class.utp.edu.pe
+  // With 'domcontentloaded' the goto returns before the redirect happens,
+  // so we must wait for the URL to settle on one of the expected destinations.
+  try {
+    await page.waitForURL(
+      (url) => {
+        const href = url.href;
+        return href.includes('sso.utp.edu.pe') ||
+               href.includes('microsoftonline.com') ||
+               href.includes('login.microsoft') ||
+               href.includes('/student/') ||
+               href.includes('#code=') ||
+               href.includes('&code=');
+      },
+      { timeout: 15_000 },
+    );
+  } catch {
+    logger.warn({ url: page.url() }, 'URL did not redirect to SSO or dashboard within 15s, proceeding with current URL');
+  }
+
   const currentUrl = page.url();
   logger.info({ currentUrl }, 'Login page loaded');
 
@@ -217,6 +236,19 @@ async function handleMicrosoftSSO(page: Page): Promise<void> {
 export async function isLoggedIn(page: Page): Promise<boolean> {
   try {
     await page.goto(config.UTP_BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // Wait for the SPA to redirect — if session is valid it goes to /student/*
+    // or to SSO. If it redirects to SSO, we're not logged in.
+    await page.waitForTimeout(3_000);
+    const url = page.url();
+    // If we're on the dashboard or have an OAuth callback, we're logged in
+    if (url.includes('/student/') || url.includes('#code=') || url.includes('&code=')) {
+      return true;
+    }
+    // If we're on SSO page, we're not logged in
+    if (url.includes('sso.utp.edu.pe') || url.includes('microsoftonline.com')) {
+      return false;
+    }
+    // Fallback: check for dashboard indicator
     const indicator = await page.$(SELECTORS.loggedInIndicator);
     return indicator !== null;
   } catch {
