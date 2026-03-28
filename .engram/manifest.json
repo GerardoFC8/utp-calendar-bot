@@ -24,6 +24,14 @@
       "sessions": 2,
       "memories": 6,
       "prompts": 18
+    },
+    {
+      "id": "acbba990",
+      "created_by": "gerardofc",
+      "created_at": "2026-03-28T18:13:12Z",
+      "sessions": 4,
+      "memories": 9,
+      "prompts": 10
     }
   ]
 }
