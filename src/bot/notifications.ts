@@ -127,18 +127,46 @@ export async function sendChangeNotifications(
 ): Promise<void> {
   if (changesData.length === 0) return;
 
-  const lines: string[] = ['*Cambios detectados:*', ''];
+  // Telegram message limit is 4096 characters; we use 3800 as safe threshold
+  const MAX_LENGTH = 3800;
+  const header = '*Cambios detectados:*';
 
+  const formattedLines: string[] = [];
   for (const change of changesData) {
-    const notification = formatChangeNotification({
-      changeType: change.changeType,
-      entityType: change.entityType,
-      newValue: change.newValue || undefined,
-      oldValue: change.oldValue || undefined,
-    });
-    lines.push(notification);
+    formattedLines.push(
+      formatChangeNotification({
+        changeType: change.changeType,
+        entityType: change.entityType,
+        newValue: change.newValue || undefined,
+        oldValue: change.oldValue || undefined,
+      }),
+    );
   }
 
-  await sendMessage(bot, lines.join('\n'));
-  logger.info({ count: changesData.length }, 'Change notifications sent');
+  // Split into chunks that fit within Telegram's limit
+  const chunks: string[][] = [];
+  let currentChunk: string[] = [];
+  let currentLength = header.length + 2; // header + two newlines
+
+  for (const line of formattedLines) {
+    const lineLength = line.length + 1; // +1 for the newline separator
+    if (currentLength + lineLength > MAX_LENGTH && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = [];
+      currentLength = header.length + 2;
+    }
+    currentChunk.push(line);
+    currentLength += lineLength;
+  }
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  for (let i = 0; i < chunks.length; i++) {
+    const part = chunks.length > 1 ? ` \\(${i + 1}/${chunks.length}\\)` : '';
+    const message = [`${header}${part}`, '', ...chunks[i]].join('\n');
+    await sendMessage(bot, message);
+  }
+
+  logger.info({ count: changesData.length, messages: chunks.length }, 'Change notifications sent');
 }
