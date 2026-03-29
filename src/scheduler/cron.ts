@@ -6,7 +6,7 @@ import { logger } from '../logger.js';
 import { withBrowser } from '../scraper/browser.js';
 import { login, isLoggedIn } from '../scraper/login.js';
 import { scrapeCalendar, parsePendingActivities } from '../scraper/calendar.js';
-import { scrapeCourses } from '../scraper/courses.js';
+import { scrapeCourses, enrichCoursesWithSectionDetails } from '../scraper/courses.js';
 import { createInterceptor, logDiscoveredEndpoints } from '../scraper/interceptor.js';
 import type { InterceptedData } from '../scraper/interceptor.js';
 import { deduplicateActivities } from '../scraper/tasks.js';
@@ -153,8 +153,12 @@ export async function executeScrape(): Promise<{
       // Merge and deduplicate activities (calendar + pending endpoints)
       const allActivities = deduplicateActivities([...calendarActivities, ...pendingActivities]);
 
-      // Navigate to each course page to trigger /full endpoint for unread comments
+      // Navigate to each course page to trigger /full + section detail endpoints
       const unreadComments = await scrapeUnreadComments(page, intercepted, courses);
+
+      // Enrich courses with section details (currentWeek, totalWeeks) —
+      // captured during scrapeUnreadComments course page visits
+      enrichCoursesWithSectionDetails(courses, intercepted.sectionDetails);
 
       // Log discovered API endpoints
       logDiscoveredEndpoints(intercepted);
