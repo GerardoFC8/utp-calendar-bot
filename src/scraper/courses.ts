@@ -12,27 +12,39 @@ export async function scrapeCourses(
   const coursesUrl = `${config.UTP_BASE_URL}${config.UTP_COURSES_PATH}`;
   logger.info({ url: coursesUrl }, 'Navigating to courses');
 
-  // Use 'domcontentloaded' — the SPA never reaches 'networkidle' due to
-  // background requests (analytics, keep-alive). The data we need comes from
-  // intercepted API calls, not from the DOM.
-  await page.goto(coursesUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-
-  // Wait for the dashboard-courses API call to be intercepted (poll with timeout)
-  const maxWaitMs = 15_000;
-  const pollInterval = 500;
-  const deadline = Date.now() + maxWaitMs;
-  while (intercepted.courses.length === 0 && Date.now() < deadline) {
-    await page.waitForTimeout(pollInterval);
+  // The SPA may have already fired the dashboard-courses API call during
+  // the login redirect. We keep whatever was captured — but we'll also
+  // force a fresh call by navigating to the courses page.
+  const preExisting = intercepted.courses.length;
+  if (preExisting > 0) {
+    logger.info(
+      { preExisting },
+      'Courses already intercepted (likely from login redirect) — will use them',
+    );
   }
 
-  if (intercepted.courses.length === 0) {
-    // Last resort: try a page reload and wait again
-    logger.warn('No courses API data after initial wait — reloading page');
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 15_000 });
-    const retryDeadline = Date.now() + 10_000;
-    while (intercepted.courses.length === 0 && Date.now() < retryDeadline) {
+  await page.goto(coursesUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+
+  // Wait for a NEW dashboard-courses API call if none existed before
+  if (preExisting === 0) {
+    const maxWaitMs = 15_000;
+    const pollInterval = 500;
+    const deadline = Date.now() + maxWaitMs;
+    while (intercepted.courses.length === 0 && Date.now() < deadline) {
       await page.waitForTimeout(pollInterval);
     }
+
+    if (intercepted.courses.length === 0) {
+      logger.warn('No courses API data after initial wait — reloading page');
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 15_000 });
+      const retryDeadline = Date.now() + 10_000;
+      while (intercepted.courses.length === 0 && Date.now() < retryDeadline) {
+        await page.waitForTimeout(pollInterval);
+      }
+    }
+  } else {
+    // Even if we already have data, wait briefly for a fresh response
+    await page.waitForTimeout(3_000);
   }
 
   if (intercepted.courses.length === 0) {
@@ -40,6 +52,12 @@ export async function scrapeCourses(
     logger.warn('No courses API data intercepted after retry');
     return [];
   }
+
+  // Log raw data for diagnosis
+  logger.info(
+    { interceptedCount: intercepted.courses.length },
+    'Parsing courses from intercepted data',
+  );
 
   const courses = parseCoursesFromAPI(intercepted.courses);
 
@@ -78,13 +96,24 @@ function parseCoursesFromAPI(apiData: unknown[]): CourseData[] {
   for (const response of apiData) {
     const items = extractArray(response);
 
+    logger.info(
+      { itemsFound: items.length, responseType: typeof response },
+      'Processing courses API response',
+    );
+
     for (const item of items) {
       if (!item || typeof item !== 'object') continue;
       const obj = item as Record<string, unknown>;
 
       try {
         const course = parseDashboardCourseItem(obj);
-        if (!course) continue;
+        if (!course) {
+          logger.debug(
+            { courseId: obj['courseId'], classroom: obj['classroom'], name: obj['name'] },
+            'parseDashboardCourseItem returned null — missing courseId or name',
+          );
+          continue;
+        }
 
         // Skip non-academic courses (institutional extras)
         if (course.acadCareer !== 'PREG') {
@@ -112,7 +141,8 @@ function parseCoursesFromAPI(apiData: unknown[]): CourseData[] {
 
 function parseDashboardCourseItem(obj: Record<string, unknown>): CourseData | null {
   const courseId = obj['courseId'] as string;
-  const name = obj['classroom'] as string; // "classroom" = course display name in API
+  // PREG courses have classroom=null but name set; PRED courses have both
+  const name = (obj['classroom'] as string) || (obj['name'] as string);
 
   if (!courseId || !name) return null;
 
