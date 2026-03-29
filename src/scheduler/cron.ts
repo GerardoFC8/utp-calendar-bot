@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { Telegraf } from 'telegraf';
+import type { Page } from 'playwright';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { withBrowser } from '../scraper/browser.js';
@@ -7,10 +8,11 @@ import { login, isLoggedIn } from '../scraper/login.js';
 import { scrapeCalendar, parsePendingActivities } from '../scraper/calendar.js';
 import { scrapeCourses } from '../scraper/courses.js';
 import { createInterceptor, logDiscoveredEndpoints } from '../scraper/interceptor.js';
+import type { InterceptedData } from '../scraper/interceptor.js';
 import { deduplicateActivities } from '../scraper/tasks.js';
 import { computeDiff, persistChanges } from './diff.js';
 import { checkUpcomingClasses, checkUpcomingDeadlines } from './reminders.js';
-import { sendMorningReminder, sendChangeNotifications } from '../bot/notifications.js';
+import { sendMorningReminder, sendChangeNotifications, sendProgressNotifications, sendUnreadCommentsNotification } from '../bot/notifications.js';
 import {
   getAllClasses,
   getAllActivities,
@@ -19,8 +21,102 @@ import {
   upsertCourse,
   upsertActivity,
   insertScrapeLog,
+  upsertUnreadComment,
+  getPreviousUnreadCount,
 } from '../db/queries.js';
 import type { ClassData, ActivityData, CourseData } from '../scraper/parser.js';
+
+// ============================================================
+// Unread comments scraping helpers
+// ============================================================
+
+type UnreadCommentResult = {
+  contentId: string;
+  courseId: string;
+  courseName: string;
+  contentTitle: string;
+  weekNumber: number;
+  unreadCount: number;
+};
+
+async function scrapeUnreadComments(
+  page: Page,
+  intercepted: InterceptedData,
+  courses: CourseData[],
+): Promise<UnreadCommentResult[]> {
+  const results: UnreadCommentResult[] = [];
+
+  // Only visit PREG (academic) courses that have a sectionId
+  const academicCourses = courses.filter(c => c.sectionId);
+
+  for (const course of academicCourses) {
+    const courseUrl = `${config.UTP_BASE_URL}/student/courses/${course.id}/section/${course.sectionId}/learnv2`;
+    logger.info({ course: course.name, url: courseUrl }, 'Navigating to course for unread comments');
+
+    try {
+      await page.goto(courseUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.waitForTimeout(5_000);
+    } catch {
+      logger.warn({ course: course.name }, 'Failed to navigate to course page');
+      continue;
+    }
+  }
+
+  // Parse all intercepted /full data
+  for (const fullResponse of intercepted.courseFullData) {
+    const parsed = parseFullCourseForComments(fullResponse, courses);
+    results.push(...parsed);
+  }
+
+  return results;
+}
+
+function parseFullCourseForComments(
+  response: unknown,
+  courses: CourseData[],
+): UnreadCommentResult[] {
+  const results: UnreadCommentResult[] = [];
+
+  if (!response || typeof response !== 'object') return results;
+  const obj = response as Record<string, unknown>;
+  const data = obj['data'] as Record<string, unknown> | undefined;
+  if (!data) return results;
+
+  const courseId = (data['courseId'] as string) ?? '';
+  const courseName = (data['courseName'] as string) ?? '';
+  // Look up course name from courses array if not in /full response
+  const resolvedCourseName = courseName || courses.find(c => c.id === courseId)?.name || 'Desconocido';
+
+  const unities = data['unities'] as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(unities)) return results;
+
+  for (const unity of unities) {
+    const themes = unity['themes'] as Array<Record<string, unknown>> | undefined;
+    if (!Array.isArray(themes)) continue;
+
+    for (const theme of themes) {
+      const weekNumber = (theme['weekNumber'] as number) ?? 0;
+      const contents = theme['contents'] as Array<Record<string, unknown>> | undefined;
+      if (!Array.isArray(contents)) continue;
+
+      for (const content of contents) {
+        const unreadCount = (content['unreadComments'] as number) ?? 0;
+        if (unreadCount > 0) {
+          results.push({
+            contentId: (content['contentId'] as string) ?? '',
+            courseId,
+            courseName: resolvedCourseName,
+            contentTitle: (content['title'] as string) ?? 'Sin titulo',
+            weekNumber,
+            unreadCount,
+          });
+        }
+      }
+    }
+  }
+
+  return results;
+}
 
 export async function executeScrape(): Promise<{
   coursesFound: number;
@@ -28,6 +124,8 @@ export async function executeScrape(): Promise<{
   activitiesFound: number;
   changesDetected: number;
   duration: number;
+  progressChanges: Array<{ courseName: string; oldProgress: number; newProgress: number }>;
+  newUnreadNotifications: Array<{ courseName: string; contentTitle: string; weekNumber: number; newCount: number }>;
 }> {
   const startTime = Date.now();
   logger.info('Starting scrape cycle');
@@ -55,10 +153,13 @@ export async function executeScrape(): Promise<{
       // Merge and deduplicate activities (calendar + pending endpoints)
       const allActivities = deduplicateActivities([...calendarActivities, ...pendingActivities]);
 
+      // Navigate to each course page to trigger /full endpoint for unread comments
+      const unreadComments = await scrapeUnreadComments(page, intercepted, courses);
+
       // Log discovered API endpoints
       logDiscoveredEndpoints(intercepted);
 
-      return { courses, classes, activities: allActivities };
+      return { courses, classes, activities: allActivities, unreadComments };
     });
 
     // Compute diffs
@@ -78,6 +179,23 @@ export async function executeScrape(): Promise<{
       existingActivities as unknown as Parameters<typeof computeDiff>[0],
       result.activities as unknown as Parameters<typeof computeDiff>[1],
     );
+
+    // Compare progress between existing and scraped courses
+    const progressChanges: Array<{ courseName: string; oldProgress: number; newProgress: number }> = [];
+    for (const course of result.courses) {
+      const existing = existingCourses.find(c => (c as any).id === course.id);
+      if (existing && typeof (existing as any).progress === 'number') {
+        const oldProg = (existing as any).progress as number;
+        const newProg = course.progress;
+        if (Math.abs(newProg - oldProg) >= 0.5) { // only notify if change >= 0.5%
+          progressChanges.push({
+            courseName: course.name,
+            oldProgress: oldProg,
+            newProgress: newProg,
+          });
+        }
+      }
+    }
 
     // Persist changes to changes table
     persistChanges(classDiff, 'class');
@@ -114,6 +232,8 @@ export async function executeScrape(): Promise<{
         teacherLastName: course.teacherLastName,
         teacherEmail: course.teacherEmail,
         progress: course.progress,
+        currentWeek: course.currentWeek ?? null,
+        totalWeeks: course.totalWeeks ?? null,
         lastSeen: now,
       });
     }
@@ -130,6 +250,29 @@ export async function executeScrape(): Promise<{
         studentStatus: activity.studentStatus,
         evaluationSystem: activity.evaluationSystem ?? null,
         isQualificated: activity.isQualificated ? 1 : 0,
+        lastSeen: now,
+      });
+    }
+
+    // Track unread comments
+    const newUnreadNotifications: Array<{ courseName: string; contentTitle: string; weekNumber: number; newCount: number }> = [];
+    for (const item of result.unreadComments) {
+      const prevCount = getPreviousUnreadCount(item.contentId);
+      if (item.unreadCount > prevCount) {
+        newUnreadNotifications.push({
+          courseName: item.courseName,
+          contentTitle: item.contentTitle,
+          weekNumber: item.weekNumber,
+          newCount: item.unreadCount - prevCount,
+        });
+      }
+      upsertUnreadComment({
+        contentId: item.contentId,
+        courseId: item.courseId,
+        courseName: item.courseName,
+        contentTitle: item.contentTitle,
+        weekNumber: item.weekNumber,
+        unreadCount: item.unreadCount,
         lastSeen: now,
       });
     }
@@ -165,6 +308,8 @@ export async function executeScrape(): Promise<{
       activitiesFound: result.activities.length,
       changesDetected: totalChanges,
       duration,
+      progressChanges,
+      newUnreadNotifications,
     };
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -192,6 +337,12 @@ export function startScheduler(bot: Telegraf): void {
         const { getRecentChanges } = await import('../db/queries.js');
         const recentChanges = getRecentChanges(result.changesDetected);
         await sendChangeNotifications(bot, recentChanges);
+      }
+      if (result.progressChanges.length > 0) {
+        await sendProgressNotifications(bot, result.progressChanges);
+      }
+      if (result.newUnreadNotifications.length > 0) {
+        await sendUnreadCommentsNotification(bot, result.newUnreadNotifications);
       }
     } catch (error) {
       logger.error({ error }, 'Scheduled scrape failed');

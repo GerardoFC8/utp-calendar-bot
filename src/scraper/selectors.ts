@@ -93,4 +93,8 @@ export const API_ENDPOINTS = {
 
   // GET — general survey status
   survey: '/course/student/general/survey',
+
+  // GET — returns complete course structure with all weeks, themes, contents
+  // Each content has unreadComments field
+  courseFull: '/course/student/courses/:courseId/sections/:sectionId/full',
 } as const;

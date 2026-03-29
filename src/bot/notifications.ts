@@ -1,12 +1,14 @@
 import { Telegraf } from 'telegraf';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { getClassesForDate, getPendingActivities } from '../db/queries.js';
+import { getClassesForDate, getPendingActivities, getCurrentAcademicWeek } from '../db/queries.js';
 import type { ClassRow, ActivityRow } from '../db/queries.js';
 import {
   formatDailySchedule,
-  formatChangeNotification,
+  formatGroupedChangeNotifications,
   formatDeadlineReminder,
+  formatProgressNotification,
+  formatUnreadCommentsNotification,
   escapeMarkdown,
 } from './formatters.js';
 import type { ClassData, ActivityData } from '../scraper/parser.js';
@@ -85,7 +87,8 @@ export async function sendMorningReminder(bot: Telegraf): Promise<void> {
     return;
   }
 
-  const message = formatDailySchedule(today, classes, todayActivities, 'Buenos dias');
+  const weekInfo = getCurrentAcademicWeek();
+  const message = formatDailySchedule(today, classes, todayActivities, 'Buenos dias', weekInfo);
 
   await sendMessage(bot, message);
   logger.info('Morning reminder sent');
@@ -127,46 +130,33 @@ export async function sendChangeNotifications(
 ): Promise<void> {
   if (changesData.length === 0) return;
 
-  // Telegram message limit is 4096 characters; we use 3800 as safe threshold
-  const MAX_LENGTH = 3800;
-  const header = '*Cambios detectados:*';
+  const messages = formatGroupedChangeNotifications(changesData);
 
-  const formattedLines: string[] = [];
-  for (const change of changesData) {
-    formattedLines.push(
-      formatChangeNotification({
-        changeType: change.changeType,
-        entityType: change.entityType,
-        newValue: change.newValue || undefined,
-        oldValue: change.oldValue || undefined,
-      }),
-    );
-  }
-
-  // Split into chunks that fit within Telegram's limit
-  const chunks: string[][] = [];
-  let currentChunk: string[] = [];
-  let currentLength = header.length + 2; // header + two newlines
-
-  for (const line of formattedLines) {
-    const lineLength = line.length + 1; // +1 for the newline separator
-    if (currentLength + lineLength > MAX_LENGTH && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = [];
-      currentLength = header.length + 2;
-    }
-    currentChunk.push(line);
-    currentLength += lineLength;
-  }
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-
-  for (let i = 0; i < chunks.length; i++) {
-    const part = chunks.length > 1 ? ` \\(${i + 1}/${chunks.length}\\)` : '';
-    const message = [`${header}${part}`, '', ...chunks[i]].join('\n');
+  for (const message of messages) {
     await sendMessage(bot, message);
   }
 
-  logger.info({ count: changesData.length, messages: chunks.length }, 'Change notifications sent');
+  logger.info({ count: changesData.length, messages: messages.length }, 'Change notifications sent');
+}
+
+export async function sendProgressNotifications(
+  bot: Telegraf,
+  progressChanges: Array<{ courseName: string; oldProgress: number; newProgress: number }>,
+): Promise<void> {
+  if (progressChanges.length === 0) return;
+
+  const message = formatProgressNotification(progressChanges);
+  await sendMessage(bot, message);
+  logger.info({ count: progressChanges.length }, 'Progress notifications sent');
+}
+
+export async function sendUnreadCommentsNotification(
+  bot: Telegraf,
+  newComments: Array<{ courseName: string; contentTitle: string; weekNumber: number; newCount: number }>,
+): Promise<void> {
+  if (newComments.length === 0) return;
+
+  const message = formatUnreadCommentsNotification(newComments);
+  await sendMessage(bot, message);
+  logger.info({ count: newComments.length }, 'Unread comments notification sent');
 }

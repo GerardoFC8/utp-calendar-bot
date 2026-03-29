@@ -26,6 +26,27 @@ export async function scrapeCourses(
   }
 
   const courses = parseCoursesFromAPI(intercepted.courses);
+
+  // Enrich with section details (currentWeek, totalWeeks) if already available
+  enrichCoursesWithSectionDetails(courses, intercepted.sectionDetails);
+
+  // If no section details captured yet, visit each course page to trigger the API call
+  if (intercepted.sectionDetails.length === 0) {
+    logger.info('No section details captured — visiting individual course pages');
+    for (const course of courses) {
+      if (!course.sectionId) continue;
+      const courseUrl = `${config.UTP_BASE_URL}/student/courses/${course.id}/section/${course.sectionId}/learnv2`;
+      try {
+        await page.goto(courseUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+        await page.waitForTimeout(3_000);
+      } catch {
+        logger.warn({ course: course.name }, 'Failed to visit course for section details');
+      }
+    }
+    // Re-enrich after visiting
+    enrichCoursesWithSectionDetails(courses, intercepted.sectionDetails);
+  }
+
   logger.info({ count: courses.length }, 'Courses scraped');
   return courses;
 }
@@ -111,6 +132,35 @@ function parseDashboardCourseItem(obj: Record<string, unknown>): CourseData | nu
     teacherEmail: teacherEmail.toLowerCase().trim(),
     progress,
   };
+}
+
+// ============================================================
+// Section detail enrichment — adds currentWeek / totalWeeks to courses
+// ============================================================
+
+function enrichCoursesWithSectionDetails(courses: CourseData[], sectionDetails: unknown[]): void {
+  for (const response of sectionDetails) {
+    if (!response || typeof response !== 'object') continue;
+    const obj = response as Record<string, unknown>;
+    const data = obj['data'] as Record<string, unknown> | undefined;
+    if (!data) continue;
+
+    const courseId = data['courseId'] as string | undefined;
+    const currentWeek = data['currentWeek'] as number | undefined;
+    const numWeeks = data['numWeeks'] as number | undefined;
+
+    if (!courseId) continue;
+
+    const course = courses.find(c => c.id === courseId);
+    if (course) {
+      course.currentWeek = currentWeek;
+      course.totalWeeks = numWeeks;
+      logger.debug(
+        { courseId, currentWeek, numWeeks },
+        'Enriched course with section detail week info',
+      );
+    }
+  }
 }
 
 // ============================================================

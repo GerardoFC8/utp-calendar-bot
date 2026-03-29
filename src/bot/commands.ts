@@ -13,6 +13,7 @@ import {
   getLastScrapeLog,
   setSetting,
   getAllSettings,
+  getCurrentAcademicWeek,
 } from '../db/queries.js';
 import {
   escapeMarkdown,
@@ -40,6 +41,7 @@ type RefreshCallback = () => Promise<{
   activitiesFound: number;
   changesDetected: number;
   duration: number;
+  progressChanges?: Array<{ courseName: string; oldProgress: number; newProgress: number }>;
 }>;
 
 let refreshCallback: RefreshCallback | null = null;
@@ -96,6 +98,8 @@ function mapCourseRow(row: CourseRow): CourseData {
     teacherLastName: row.teacherLastName ?? '',
     teacherEmail: row.teacherEmail ?? '',
     progress: row.progress ?? 0,
+    currentWeek: row.currentWeek ?? undefined,
+    totalWeeks: row.totalWeeks ?? undefined,
   };
 }
 
@@ -138,6 +142,16 @@ function parseMonthArg(arg: string, now: Date): { year: number; month: number } 
 }
 
 // ============================================================
+// Progress bar helper
+// ============================================================
+
+function buildProgressBar(pct: number): string {
+  const filled = Math.round(pct / 10);
+  const empty = 10 - filled;
+  return escapeMarkdown('[' + '\u2588'.repeat(filled) + '\u2591'.repeat(empty) + ']');
+}
+
+// ============================================================
 // Command registration
 // ============================================================
 
@@ -154,6 +168,7 @@ export function registerCommands(bot: Telegraf): void {
       '/semana \\[\\+N\\] \\- Horario semanal \\(\\+1 \\= proxima semana\\)',
       '/resumen \\- Dashboard compacto del dia',
       '/cursos \\- Lista de cursos activos',
+      '/progreso \\- Progreso por curso',
       '/actividades \\[mes\\] \\- Actividades del mes \\(ej\\: abril, 1\\)',
       '/pendientes \\- Actividades urgentes \\(proximos 3 dias\\)',
       '/reporte \\- Exportar actividades completas como archivo TXT',
@@ -179,7 +194,8 @@ export function registerCommands(bot: Telegraf): void {
         return activityDate === todayStr;
       });
 
-    const message = formatDailySchedule(today, classes, activities);
+    const weekInfo = getCurrentAcademicWeek();
+    const message = formatDailySchedule(today, classes, activities, undefined, weekInfo);
     await ctx.reply(message, { parse_mode: 'MarkdownV2' });
   });
 
@@ -265,6 +281,7 @@ export function registerCommands(bot: Telegraf): void {
       c => c.startAt >= `${todayStr} 00:00:00` && c.startAt <= `${weekEndStr} 23:59:59`,
     );
 
+    const weekInfo = getCurrentAcademicWeek();
     const message = formatResumen({
       todayClasses,
       weekClasses,
@@ -273,6 +290,7 @@ export function registerCommands(bot: Telegraf): void {
       pendingCount: allPendingRows.length,
       nextDeadline,
       today,
+      weekInfo,
     });
 
     await ctx.reply(message, { parse_mode: 'MarkdownV2' });
@@ -282,6 +300,33 @@ export function registerCommands(bot: Telegraf): void {
     const courses = getAllCourses().map(mapCourseRow);
     const message = formatCoursesList(courses);
     await ctx.reply(message, { parse_mode: 'MarkdownV2' });
+  });
+
+  bot.command('progreso', async (ctx) => {
+    const courses = getAllCourses().map(mapCourseRow);
+
+    if (courses.length === 0) {
+      await ctx.reply('_No hay cursos registrados_', { parse_mode: 'MarkdownV2' });
+      return;
+    }
+
+    const lines: string[] = [];
+    lines.push('*Progreso por curso:*');
+    lines.push('');
+
+    for (const course of courses) {
+      const name = escapeMarkdown(course.name);
+      const pct = course.progress;
+      const bar = buildProgressBar(pct);
+      lines.push(`*${name}*`);
+      lines.push(`${bar} ${escapeMarkdown(pct.toFixed(1) + '%')}`);
+      lines.push('');
+    }
+
+    const message = lines.join('\n');
+    for (const chunk of splitMessage(message)) {
+      await ctx.reply(chunk, { parse_mode: 'MarkdownV2' });
+    }
   });
 
   bot.command('actividades', async (ctx) => {
@@ -501,6 +546,7 @@ export function registerCommands(bot: Telegraf): void {
       '/semana \\[\\+N\\] \\- Horario semanal \\(\\+1 \\= proxima semana\\)',
       '/resumen \\- Dashboard compacto del dia',
       '/cursos \\- Lista de cursos activos del semestre',
+      '/progreso \\- Progreso por curso',
       '/actividades \\[mes\\] \\- Actividades del mes \\(ej\\: abril, 1\\)',
       '/pendientes \\- Actividades urgentes \\(proximos 3 dias\\)',
       '/reporte \\- Exportar actividades completas como archivo TXT',

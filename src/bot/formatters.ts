@@ -80,6 +80,7 @@ export function formatResumen(params: {
   pendingCount: number;
   nextDeadline: ActivityData | null;
   today: Date;
+  weekInfo?: { currentWeek: number; totalWeeks: number } | null;
 }): string {
   const {
     todayClasses,
@@ -89,6 +90,7 @@ export function formatResumen(params: {
     pendingCount,
     nextDeadline,
     today,
+    weekInfo,
   } = params;
 
   const lines: string[] = [];
@@ -98,6 +100,12 @@ export function formatResumen(params: {
   const day = today.getDate();
   const monthName = getSpanishMonthName(today);
   lines.push(`*${escapeMarkdown(`Resumen \u2014 ${dayName} ${day} de ${monthName}`)}*`);
+
+  // Add academic week info
+  if (weekInfo) {
+    lines.push(`_Semana academica ${weekInfo.currentWeek} de ${weekInfo.totalWeeks}_`);
+  }
+
   lines.push('');
 
   // Hoy: clases
@@ -200,6 +208,7 @@ export function formatDailySchedule(
   classes: ClassData[],
   activities: ActivityData[],
   greeting?: string,
+  weekInfo?: { currentWeek: number; totalWeeks: number } | null,
 ): string {
   const lines: string[] = [];
 
@@ -209,6 +218,12 @@ export function formatDailySchedule(
   }
 
   lines.push(formatDayHeader(date));
+
+  // Add academic week info
+  if (weekInfo) {
+    lines.push(`_Semana ${weekInfo.currentWeek} de ${weekInfo.totalWeeks}_`);
+  }
+
   lines.push('');
 
   // Sort by startAt
@@ -530,6 +545,224 @@ export function formatChangeNotification(change: {
 }
 
 // ============================================================
+// Grouped change notification formatter
+// ============================================================
+
+interface ParsedChangeEntity {
+  title?: string;
+  name?: string;
+  courseName?: string;
+  weekNumber?: number;
+  activityType?: string;
+  evaluationSystem?: string | null;
+  finishAt?: string;
+}
+
+interface NormalizedChange {
+  changeType: string;
+  entityType: string;
+  entity: ParsedChangeEntity;
+  displayTitle: string;
+  courseName: string;
+  weekNumber: number;
+}
+
+function extractWeekFromTitle(title: string): number {
+  // Match "Week XX" or "Semana XX" patterns (case-insensitive)
+  const weekMatch = title.match(/(?:Week|Semana)\s+(\d+)/i);
+  if (weekMatch) return parseInt(weekMatch[1], 10);
+  return 0;
+}
+
+function extractCourseFromTitle(title: string): string {
+  // Some titles have course code like "MATEMATICA DISCRETA (32061)"
+  const courseMatch = title.match(/^([A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑ\s]+?)(?:\s*\(\d+\))/i);
+  if (courseMatch) return courseMatch[1].trim();
+  return '';
+}
+
+function normalizeChange(change: {
+  changeType: string;
+  entityType: string;
+  newValue?: string | null;
+  oldValue?: string | null;
+}): NormalizedChange {
+  const entity: ParsedChangeEntity = change.newValue
+    ? (JSON.parse(change.newValue) as ParsedChangeEntity)
+    : change.oldValue
+      ? (JSON.parse(change.oldValue) as ParsedChangeEntity)
+      : {};
+
+  const displayTitle = entity.title || entity.name || 'Desconocido';
+
+  // Determine courseName: explicit field first, then try to extract from title
+  let courseName = entity.courseName || '';
+  if (!courseName && displayTitle) {
+    courseName = extractCourseFromTitle(displayTitle) || 'Otros';
+  }
+  if (!courseName) courseName = 'Otros';
+
+  // Determine weekNumber: explicit field first, then parse from title
+  let weekNumber = entity.weekNumber ?? 0;
+  if (!weekNumber && displayTitle) {
+    weekNumber = extractWeekFromTitle(displayTitle);
+  }
+
+  return {
+    changeType: change.changeType,
+    entityType: change.entityType,
+    entity,
+    displayTitle,
+    courseName,
+    weekNumber,
+  };
+}
+
+function formatChangeLinePrefix(changeType: string): string {
+  if (changeType === 'added') return 'Nueva ';
+  if (changeType === 'removed') return '\u274c ';
+  // modified — no prefix
+  return '';
+}
+
+/**
+ * Build grouped change notification messages split to fit Telegram's 4096-char limit.
+ * Returns an array of ready-to-send MarkdownV2 strings, each with "(1/N)" suffix.
+ */
+export function formatGroupedChangeNotifications(
+  changesData: Array<{
+    changeType: string;
+    entityType: string;
+    newValue?: string | null;
+    oldValue?: string | null;
+  }>,
+): string[] {
+  if (changesData.length === 0) return [];
+
+  // 1. Normalize all changes
+  const normalized = changesData.map(normalizeChange);
+
+  // 2. Count by type for footer
+  const countAdded = normalized.filter((c) => c.changeType === 'added').length;
+  const countModified = normalized.filter((c) => c.changeType === 'modified').length;
+  const countRemoved = normalized.filter((c) => c.changeType === 'removed').length;
+
+  // 3. Group by courseName
+  const byCourse = new Map<string, NormalizedChange[]>();
+  for (const change of normalized) {
+    if (!byCourse.has(change.courseName)) byCourse.set(change.courseName, []);
+    byCourse.get(change.courseName)!.push(change);
+  }
+
+  // 4. Sort courses alphabetically
+  const sortedCourses = [...byCourse.keys()].sort((a, b) => a.localeCompare(b));
+
+  // 5. Build content blocks per course
+  const courseBlocks: string[] = [];
+  for (const courseName of sortedCourses) {
+    const courseChanges = byCourse.get(courseName)!;
+    const blockLines: string[] = [];
+
+    const shortName = shortenCourseName(courseName);
+    blockLines.push(`\ud83d\udcda *${escapeMarkdown(shortName)}*`);
+
+    // Group by weekNumber within this course
+    const byWeek = new Map<number, NormalizedChange[]>();
+    for (const change of courseChanges) {
+      if (!byWeek.has(change.weekNumber)) byWeek.set(change.weekNumber, []);
+      byWeek.get(change.weekNumber)!.push(change);
+    }
+
+    // Sort weeks numerically (week 0 = unknown, put at end)
+    const sortedWeeks = [...byWeek.keys()].sort((a, b) => {
+      if (a === 0) return 1;
+      if (b === 0) return -1;
+      return a - b;
+    });
+
+    for (const weekNum of sortedWeeks) {
+      const weekChanges = byWeek.get(weekNum)!;
+      const weekLabel = weekNum > 0 ? `  Sem ${weekNum}:` : '  Sin semana:';
+      blockLines.push(escapeMarkdown(weekLabel));
+
+      for (const change of weekChanges) {
+        const prefix = formatChangeLinePrefix(change.changeType);
+        const title = escapeMarkdown(change.displayTitle);
+        blockLines.push(`    ${prefix}${title}`);
+      }
+    }
+
+    courseBlocks.push(blockLines.join('\n'));
+  }
+
+  // 6. Build footer summary
+  const footer = escapeMarkdown(`\u2795 ${countAdded} nuevas | \u270f\ufe0f ${countModified} modificadas | \u274c ${countRemoved} eliminadas`);
+
+  // 7. Split into Telegram-safe messages
+  const MAX_LENGTH = 3800;
+  const headerBase = '\ud83d\udcca *Cambios detectados*';
+
+  const messages: string[] = [];
+  let currentBlocks: string[] = [];
+  let currentLength = 0;
+
+  for (const block of courseBlocks) {
+    const estimatedLength = currentLength + block.length + 2; // +2 for \n\n separator
+
+    if (estimatedLength > MAX_LENGTH && currentBlocks.length > 0) {
+      // Flush current batch
+      messages.push(currentBlocks.join('\n\n'));
+      currentBlocks = [block];
+      currentLength = block.length;
+    } else {
+      currentBlocks.push(block);
+      currentLength += block.length + 2;
+    }
+  }
+
+  if (currentBlocks.length > 0) {
+    messages.push(currentBlocks.join('\n\n'));
+  }
+
+  // 8. Add header with (N/total) and footer on last message
+  const total = messages.length;
+  return messages.map((body, idx) => {
+    const partSuffix = total > 1 ? ` \\(${idx + 1}/${total}\\)` : '';
+    const headerLine = `${headerBase}${partSuffix}`;
+    const isLast = idx === total - 1;
+    return isLast
+      ? `${headerLine}\n\n${body}\n\n${footer}`
+      : `${headerLine}\n\n${body}`;
+  });
+}
+
+// ============================================================
+// Progress notification formatter
+// ============================================================
+
+export function formatProgressNotification(
+  progressChanges: Array<{ courseName: string; oldProgress: number; newProgress: number }>,
+): string {
+  const lines: string[] = [];
+  lines.push('\ud83d\udcc8 *Progreso actualizado:*');
+  lines.push('');
+
+  for (const change of progressChanges) {
+    const course = escapeMarkdown(shortenCourseName(change.courseName));
+    const oldPct = escapeMarkdown(change.oldProgress.toFixed(1) + '%');
+    const newPct = escapeMarkdown(change.newProgress.toFixed(1) + '%');
+    const diff = change.newProgress - change.oldProgress;
+    const arrow = diff > 0 ? '\u2b06\ufe0f' : '\u2b07\ufe0f';
+    const diffStr = escapeMarkdown((diff > 0 ? '+' : '') + diff.toFixed(1) + '%');
+    lines.push(`${arrow} *${course}*`);
+    lines.push(`  ${oldPct} \\-\\> ${newPct} \\(${diffStr}\\)`);
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================
 // Deadline reminder formatter
 // ============================================================
 
@@ -608,10 +841,10 @@ export function formatConfigMenu(settings: Record<string, string>): string {
 // Helpers
 // ============================================================
 
-function shortenCourseName(name: string): string {
+export function shortenCourseName(name: string): string {
   // Truncate very long course names for display
-  if (name.length <= 20) return name;
-  return name.substring(0, 18) + '..';
+  if (name.length <= 30) return name;
+  return name.substring(0, 28) + '..';
 }
 
 // ============================================================
@@ -731,4 +964,37 @@ export function splitMessage(text: string): string[] {
 
   if (current.length > 0) chunks.push(current);
   return chunks;
+}
+
+// ============================================================
+// Unread comments formatter
+// ============================================================
+
+export function formatUnreadCommentsNotification(
+  newComments: Array<{ courseName: string; contentTitle: string; weekNumber: number; newCount: number }>,
+): string {
+  const lines: string[] = [];
+  lines.push('\ud83d\udcac *Nuevos comentarios:*');
+  lines.push('');
+
+  // Group by course
+  const byCourse = new Map<string, typeof newComments>();
+  for (const comment of newComments) {
+    if (!byCourse.has(comment.courseName)) byCourse.set(comment.courseName, []);
+    byCourse.get(comment.courseName)!.push(comment);
+  }
+
+  for (const [courseName, comments] of byCourse) {
+    const shortName = shortenCourseName(courseName);
+    lines.push(`\ud83d\udcda *${escapeMarkdown(shortName)}*`);
+    for (const c of comments) {
+      const title = escapeMarkdown(c.contentTitle);
+      const weekLabel = c.weekNumber > 0 ? `Sem ${c.weekNumber}` : '';
+      const weekPrefix = weekLabel ? `\\[${escapeMarkdown(weekLabel)}\\] ` : '';
+      lines.push(`  ${weekPrefix}${title} \\(${c.newCount} ${c.newCount === 1 ? 'nuevo' : 'nuevos'}\\)`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
 }

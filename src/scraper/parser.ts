@@ -14,6 +14,8 @@ export interface CourseData {
   teacherLastName: string;
   teacherEmail: string;
   progress: number;
+  currentWeek?: number;
+  totalWeeks?: number;
 }
 
 export interface ClassData {

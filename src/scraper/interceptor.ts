@@ -8,6 +8,8 @@ export interface InterceptedData {
   courses: unknown[];
   pendingActivities: unknown[];
   academicPeriods: unknown[];
+  courseFullData: unknown[];  // from /sections/{id}/full
+  sectionDetails: unknown[];  // from /courses/{id}/sections/{id}
   apiEndpoints: Map<string, string>;
 }
 
@@ -35,6 +37,8 @@ export function createInterceptor(page: Page): InterceptedData {
     courses: [],
     pendingActivities: [],
     academicPeriods: [],
+    courseFullData: [],
+    sectionDetails: [],
     apiEndpoints: new Map(),
   };
 
@@ -62,7 +66,15 @@ export function createInterceptor(page: Page): InterceptedData {
       }
 
       // Categorize by endpoint path — order matters: check more specific paths first
-      if (path.includes('/calendar/activities')) {
+      if (path.includes('/sections/') && path.endsWith('/full')) {
+        data.courseFullData.push(body);
+        data.apiEndpoints.set('courseFull', `${urlObj.origin}${path}`);
+        logger.info({ path }, 'Course full data intercepted');
+      } else if (path.match(/\/courses\/[^/]+\/sections\/[^/]+$/) && !path.includes('/full') && !path.includes('/survey')) {
+        data.sectionDetails.push(body);
+        data.apiEndpoints.set('sectionDetail', `${urlObj.origin}${path}`);
+        logger.info({ path }, 'Section detail intercepted');
+      } else if (path.includes('/calendar/activities')) {
         data.calendarActivities.push(body);
         data.apiEndpoints.set('calendarActivities', `${urlObj.origin}${path}`);
         logger.info(

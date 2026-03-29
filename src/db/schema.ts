@@ -12,6 +12,8 @@ export const courses = sqliteTable('courses', {
   teacherLastName: text('teacher_last_name'),
   teacherEmail: text('teacher_email'),
   progress: real('progress'),
+  currentWeek: integer('current_week'),
+  totalWeeks: integer('total_weeks'),
   lastSeen: integer('last_seen'),
   createdAt: integer('created_at').$defaultFn(() => Date.now()),
 });
@@ -96,3 +98,15 @@ export const botSettings = sqliteTable('bot_settings', {
   value: text('value').notNull(),
   updatedAt: integer('updated_at').$defaultFn(() => Date.now()),
 });
+
+export const unreadComments = sqliteTable('unread_comments', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  contentId: text('content_id').notNull(),
+  courseId: text('course_id'),
+  courseName: text('course_name'),
+  contentTitle: text('content_title').notNull(),
+  weekNumber: integer('week_number'),
+  unreadCount: integer('unread_count').notNull().default(0),
+  lastSeen: integer('last_seen'),
+  createdAt: integer('created_at').$defaultFn(() => Date.now()),
+}, (table) => [uniqueIndex('unread_comments_content_idx').on(table.contentId)]);

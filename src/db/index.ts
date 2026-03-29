@@ -120,7 +120,34 @@ export function initDatabase(): typeof db {
       value TEXT NOT NULL,
       updated_at INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS unread_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      content_id TEXT NOT NULL,
+      course_id TEXT,
+      course_name TEXT,
+      content_title TEXT NOT NULL,
+      week_number INTEGER,
+      unread_count INTEGER NOT NULL DEFAULT 0,
+      last_seen INTEGER,
+      created_at INTEGER
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS unread_comments_content_idx
+      ON unread_comments (content_id);
   `);
+
+  // Add new columns to existing tables (safe — ALTER TABLE ADD COLUMN is idempotent with IF NOT EXISTS-like behavior)
+  const addColumnSafe = (table: string, column: string, type: string) => {
+    try {
+      sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    } catch {
+      // Column already exists — ignore
+    }
+  };
+
+  addColumnSafe('courses', 'current_week', 'INTEGER');
+  addColumnSafe('courses', 'total_weeks', 'INTEGER');
 
   logger.info({ path: dbPath }, 'Database initialized');
   return db;

@@ -1,6 +1,6 @@
 import { desc, sql, gte, lte, and, inArray, lt, like } from 'drizzle-orm';
 import { getDatabase } from './index.js';
-import { courses, classes, activities, changes, scrapeLog, sentReminders, sentActivityReminders, botSettings } from './schema.js';
+import { courses, classes, activities, changes, scrapeLog, sentReminders, sentActivityReminders, botSettings, unreadComments } from './schema.js';
 
 // === Courses ===
 
@@ -22,6 +22,8 @@ export function upsertCourse(course: typeof courses.$inferInsert) {
         teacherLastName: course.teacherLastName,
         teacherEmail: course.teacherEmail,
         progress: course.progress,
+        currentWeek: course.currentWeek,
+        totalWeeks: course.totalWeeks,
         lastSeen: course.lastSeen,
       },
     })
@@ -31,6 +33,24 @@ export function upsertCourse(course: typeof courses.$inferInsert) {
 export function getAllCourses() {
   const db = getDatabase();
   return db.select().from(courses).all();
+}
+
+export function getCurrentAcademicWeek(): { currentWeek: number; totalWeeks: number } | null {
+  const db = getDatabase();
+  const result = db
+    .select({ currentWeek: courses.currentWeek, totalWeeks: courses.totalWeeks })
+    .from(courses)
+    .where(
+      and(
+        sql`${courses.currentWeek} IS NOT NULL`,
+        sql`${courses.currentWeek} > 0`,
+      ),
+    )
+    .limit(1)
+    .get();
+
+  if (!result || result.currentWeek === null) return null;
+  return { currentWeek: result.currentWeek, totalWeeks: result.totalWeeks ?? 18 };
 }
 
 // === Classes ===
@@ -301,6 +321,46 @@ export function getAllSettings(): Record<string, string> {
     result[row.key] = row.value;
   }
   return result;
+}
+
+// === Unread Comments ===
+
+export function upsertUnreadComment(data: typeof unreadComments.$inferInsert) {
+  const db = getDatabase();
+  return db
+    .insert(unreadComments)
+    .values(data)
+    .onConflictDoUpdate({
+      target: unreadComments.contentId,
+      set: {
+        unreadCount: data.unreadCount,
+        courseName: data.courseName,
+        contentTitle: data.contentTitle,
+        weekNumber: data.weekNumber,
+        lastSeen: data.lastSeen,
+      },
+    })
+    .run();
+}
+
+export function getUnreadComments() {
+  const db = getDatabase();
+  return db
+    .select()
+    .from(unreadComments)
+    .where(sql`${unreadComments.unreadCount} > 0`)
+    .orderBy(unreadComments.courseName, unreadComments.weekNumber)
+    .all();
+}
+
+export function getPreviousUnreadCount(contentId: string): number {
+  const db = getDatabase();
+  const result = db
+    .select({ count: unreadComments.unreadCount })
+    .from(unreadComments)
+    .where(sql`${unreadComments.contentId} = ${contentId}`)
+    .get();
+  return result?.count ?? 0;
 }
 
 // === Helpers ===
