@@ -16,12 +16,28 @@ export async function scrapeCourses(
   // background requests (analytics, keep-alive). The data we need comes from
   // intercepted API calls, not from the DOM.
   await page.goto(coursesUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  // Wait for the SPA to trigger the dashboard-courses API call
-  await page.waitForTimeout(5_000);
+
+  // Wait for the dashboard-courses API call to be intercepted (poll with timeout)
+  const maxWaitMs = 15_000;
+  const pollInterval = 500;
+  const deadline = Date.now() + maxWaitMs;
+  while (intercepted.courses.length === 0 && Date.now() < deadline) {
+    await page.waitForTimeout(pollInterval);
+  }
+
+  if (intercepted.courses.length === 0) {
+    // Last resort: try a page reload and wait again
+    logger.warn('No courses API data after initial wait — reloading page');
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 15_000 });
+    const retryDeadline = Date.now() + 10_000;
+    while (intercepted.courses.length === 0 && Date.now() < retryDeadline) {
+      await page.waitForTimeout(pollInterval);
+    }
+  }
 
   if (intercepted.courses.length === 0) {
     await takeScreenshot(page, 'courses-no-api-data');
-    logger.warn('No courses API data intercepted');
+    logger.warn('No courses API data intercepted after retry');
     return [];
   }
 
