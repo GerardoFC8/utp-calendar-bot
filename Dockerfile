@@ -18,6 +18,8 @@ WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
+# Diagnostic scripts (standalone .cjs — runnable via `docker exec`)
+COPY --from=builder /app/scripts ./scripts
 
 # Create directory for persistent data (SQLite + session state)
 # NOTE: do NOT use VOLUME here — persistence is handled by docker-compose.yml
