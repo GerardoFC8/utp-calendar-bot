@@ -1,6 +1,10 @@
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import type { Browser, BrowserContext, Page } from 'playwright';
+import { chromium as chromiumExtra } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { existsSync } from 'node:fs';
 import { logger } from '../logger.js';
+
+chromiumExtra.use(StealthPlugin());
 
 const STORAGE_STATE_PATH = './data/storage-state.json';
 
@@ -15,7 +19,7 @@ const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 export async function createBrowser(): Promise<Browser> {
-  const browser = await chromium.launch({
+  const browser = await chromiumExtra.launch({
     headless: true,
     args: BROWSER_ARGS,
   });
